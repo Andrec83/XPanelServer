@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>X-Plane Panel</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/images/icon-180.png">
+<meta name="theme-color" content="#111111">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%; height: 100%;
+  background: #111;
+  overflow: hidden;
+}
+
+#panel-grid {
+  display: grid;
+  width: 100vw;
+  height: 100vh;
+  gap: 2px;
+  padding: 2px;
+}
+
+.grid-cell {
+  position: relative;
+  overflow: hidden;
+  background: #1a1a1a;
+  border-radius: 4px;
+}
+
+.grid-cell canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* status dot */
+#status-dot {
+  position: fixed;
+  top: 10px;
+  right: 12px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 100;
+  border: 1px solid #0003;
+  transition: transform .15s;
+}
+#status-dot:hover { transform: scale(1.4); }
+#status-dot.ok  { background: #0f6; box-shadow: 0 0 6px #0f6; }
+#status-dot.err { background: #f33; box-shadow: 0 0 6px #f33; }
+
+/* fullscreen button */
+#fs-btn {
+  position: fixed;
+  top: 8px;
+  right: 32px;
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  z-index: 100;
+  opacity: 0.55;
+  transition: opacity .2s;
+  background: none;
+  border: none;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#fs-btn:hover { opacity: 1; }
+#fs-btn svg { width: 16px; height: 16px; fill: #ccc; }
+
+/* connecting overlay */
+#overlay {
+  display: flex;
+  position: fixed;
+  inset: 0;
+  background: #0009;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+.overlay-msg {
+  color: #fa0;
+  font-family: monospace;
+  font-size: clamp(12px, 2vw, 18px);
+  white-space: pre-line;
+  text-align: center;
+}
+
+/* HUD overlay */
+#hud-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: #0007;
+  z-index: 300;
+}
+.hud-box {
+  position: absolute;
+  top: 30px;
+  right: 30px;
+  background: #1a1a1a;
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  color: #ccc;
+  font-family: monospace;
+  font-size: .85rem;
+  min-width: 200px;
+}
+.hud-box h3 { font-size: .8rem; color: #4af; margin-bottom: .6rem; letter-spacing: .05em; }
+.hud-row { display: flex; justify-content: space-between; gap: 1.5rem; margin-bottom: .35rem; }
+.hud-row span { color: #888; }
+.hud-row strong { color: #ddd; }
+.hud-box a { display: block; margin-top: .8rem; color: #4af; font-size: .8rem; text-decoration: none; }
+.hud-box a:hover { text-decoration: underline; }
+
+#panel-title { display: none; }
+</style>
+</head>
+<body>
+
+<div id="panel-grid"></div>
+
+<div id="status-dot" class="status-dot err" title="Disconnected"></div>
+
+<button id="fs-btn" title="Toggle fullscreen">
+  <svg id="fs-icon-enter" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <path d="M3 3h6v2H5v4H3zm12 0h6v6h-2V5h-4zm-12 12H3v6h6v-2H5v-4zm14 4h-4v2h6v-6h-2z"/>
+  </svg>
+  <svg id="fs-icon-exit" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="display:none">
+    <path d="M5 16h3v3h2v-5H5zm3-8H5v2h5V5H8zm6 11h2v-3h3v-2h-5zm2-11V5h-2v5h5V8z"/>
+  </svg>
+</button>
+
+<div id="overlay">
+  <div class="overlay-msg">Connecting…</div>
+</div>
+
+<div id="hud-overlay">
+  <div class="hud-box">
+    <h3>STATUS</h3>
+    <div class="hud-row"><span>Update rate</span><strong><span id="hud-rate">—</span> /s</strong></div>
+    <div class="hud-row"><span>Last update</span><strong><span id="hud-latency">—</span> ms ago</strong></div>
+    <a href="index.html">← Panel Manager</a>
+  </div>
+</div>
+
+<span id="panel-title"></span>
+
+<script type="module" src="js/panel.js"></script>
+
+<script>
+;(function () {
+  const btn        = document.getElementById('fs-btn')
+  const iconEnter  = document.getElementById('fs-icon-enter')
+  const iconExit   = document.getElementById('fs-icon-exit')
+
+  if (!document.documentElement.requestFullscreen) {
+    btn.style.display = 'none'   // browser doesn't support it (iOS Safari)
+    return
+  }
+
+  function update() {
+    const full = !!document.fullscreenElement
+    iconEnter.style.display = full ? 'none'  : ''
+    iconExit.style.display  = full ? ''      : 'none'
+  }
+
+  btn.addEventListener('click', () => {
+    if (document.fullscreenElement) document.exitFullscreen()
+    else document.documentElement.requestFullscreen()
+  })
+
+  document.addEventListener('fullscreenchange', update)
+  update()
+})()
+</script>
+</body>
+</html>

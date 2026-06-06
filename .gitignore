@@ -1,0 +1,9 @@
+.venv/
+.claude/
+.idea/
+# scratch files in repo root
+/*.png
+/*.zip
+panels.json
+xplane-plugin/sdk
+xplane-plugin/build/

@@ -1,0 +1,1062 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>X-Plane Panel Manager</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/images/icon-180.png">
+<meta name="theme-color" content="#111111">
+<script type="importmap">
+{
+  "imports": {
+    "interactjs": "https://cdn.jsdelivr.net/npm/interactjs/dist/interact.esm.js"
+  }
+}
+</script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: system-ui, sans-serif;
+  background: #0d0d0d;
+  color: #ddd;
+  min-height: 100vh;
+}
+
+/* ── nav ── */
+nav {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: .75rem 1.5rem;
+  background: #1a1a1a;
+  border-bottom: 1px solid #333;
+}
+nav h1 { font-size: 1rem; font-weight: 600; color: #4af; letter-spacing: .05em; }
+nav .spacer { flex: 1; }
+nav button {
+  background: none;
+  border: 1px solid #444;
+  color: #aaa;
+  padding: .35rem .85rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: .85rem;
+}
+nav button:hover { border-color: #4af; color: #4af; }
+nav button.active { border-color: #4af; color: #4af; background: #4af1; }
+#xp-badge {
+  font-size: .75rem; padding: .2rem .6rem; border-radius: 10px; border: 1px solid;
+  transition: color .3s, border-color .3s, background .3s;
+}
+#xp-badge.ok  { color: #4f8; border-color: #4f84; background: #4f81; }
+#xp-badge.err { color: #f64; border-color: #f644; background: #f641; }
+#xp-badge.info { color: #aaa; border-color: #4444; background: none; }
+
+/* ── views ── */
+.view { display: none; padding: 1.5rem; }
+#view-home, #view-settings { max-width: 1100px; }
+.view.active { display: block; }
+
+/* ── home view ── */
+.panel-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; margin-top: 1rem; }
+.panel-card {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 1rem;
+}
+.panel-card h3 { font-size: .95rem; margin-bottom: .4rem; }
+.panel-card .meta { font-size: .75rem; color: #666; margin-bottom: .8rem; }
+.panel-card .actions { display: flex; gap: .5rem; }
+.panel-card .actions button {
+  flex: 1;
+  padding: .35rem;
+  border: 1px solid #333;
+  background: #222;
+  color: #bbb;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: .8rem;
+}
+.panel-card .actions button:hover { border-color: #4af; color: #4af; }
+.panel-card .actions button.open { background: #4af2; border-color: #4af; color: #4af; }
+.panel-card .actions button.del:hover { border-color: #f44; color: #f44; }
+.empty-state { color: #555; font-size: .9rem; margin-top: 2rem; }
+
+.btn-primary {
+  display: inline-flex; align-items: center; gap: .4rem;
+  background: #4af2; border: 1px solid #4af; color: #4af;
+  padding: .45rem 1rem; border-radius: 4px; cursor: pointer; font-size: .9rem;
+}
+.btn-primary:hover { background: #4af3; }
+
+/* ── editor view ── */
+.editor-layout {
+  display: grid;
+  grid-template-columns: 180px 1fr 220px;
+  grid-template-rows: auto 1fr;
+  gap: 1rem;
+  height: calc(100vh - 120px);
+}
+.editor-topbar {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; gap: .75rem;
+  background: #1a1a1a; border: 1px solid #333; border-radius: 6px; padding: .75rem 1rem;
+}
+.editor-topbar input[type=text] {
+  background: #111; border: 1px solid #444; color: #ddd;
+  padding: .4rem .6rem; border-radius: 4px; font-size: .9rem; width: 220px;
+}
+.editor-topbar input[type=text]:focus { outline: none; border-color: #4af; }
+.editor-topbar label { font-size: .8rem; color: #888; }
+.editor-topbar select {
+  background: #111; border: 1px solid #444; color: #ddd;
+  padding: .35rem .5rem; border-radius: 4px; font-size: .85rem;
+}
+.editor-topbar .spacer { flex: 1; }
+
+/* palette */
+.palette {
+  background: #1a1a1a; border: 1px solid #333; border-radius: 6px;
+  padding: .75rem; overflow-y: auto;
+}
+.palette h4 { font-size: .75rem; color: #666; text-transform: uppercase; letter-spacing: .08em; margin-bottom: .6rem; }
+.palette-item {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .5rem .6rem; border: 1px solid #333; border-radius: 4px;
+  margin-bottom: .4rem; cursor: grab; background: #111; font-size: .82rem; color: #ccc;
+  user-select: none;
+}
+.palette-item:hover { border-color: #4af; color: #4af; }
+.palette-item .icon { font-size: 1rem; width: 1.2rem; text-align: center; }
+
+/* grid area */
+.editor-canvas {
+  background: #111; border: 1px solid #333; border-radius: 6px;
+  overflow: auto;
+  padding: 1rem;
+}
+.grid-preview {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+}
+.grid-cell {
+  background: #1a1a1a;
+  border: 1px dashed #333;
+  border-radius: 4px;
+  min-height: 80px;
+  min-width: 80px;
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+}
+.grid-cell.drag-over { border-color: #4af; background: #4af1; }
+.grid-cell.occupied { border-style: solid; border-color: #555; }
+
+.widget-tile {
+  width: 100%; height: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: .25rem; cursor: pointer; border-radius: 3px;
+  background: #222;
+}
+.widget-tile .wicon { font-size: 1.4rem; }
+.widget-tile .wlabel { font-size: .7rem; color: #aaa; text-transform: uppercase; letter-spacing: .06em; }
+.widget-tile .wremove {
+  position: absolute; top: 3px; right: 4px;
+  background: none; border: none; color: #555; cursor: pointer; font-size: .8rem; line-height: 1;
+}
+.widget-tile .wremove:hover { color: #f44; }
+.widget-tile.selected { background: #4af2; }
+
+/* right sidebar */
+.sidebar-right {
+  background: #1a1a1a; border: 1px solid #333; border-radius: 6px;
+  padding: .75rem; overflow-y: auto;
+}
+.sidebar-right h4 { font-size: .75rem; color: #666; text-transform: uppercase; letter-spacing: .08em; margin-bottom: .75rem; }
+.sidebar-right .empty-msg { font-size: .8rem; color: #444; }
+.field-row { margin-bottom: .65rem; }
+.field-row label { display: block; font-size: .75rem; color: #888; margin-bottom: .2rem; }
+.field-row input, .field-row select {
+  width: 100%; background: #111; border: 1px solid #444; color: #ddd;
+  padding: .35rem .5rem; border-radius: 4px; font-size: .82rem;
+}
+.field-row input:focus, .field-row select:focus { outline: none; border-color: #4af; }
+
+/* ── settings view ── */
+.settings-section {
+  background: #1a1a1a; border: 1px solid #333; border-radius: 6px;
+  padding: 1.25rem; margin-bottom: 1.25rem; max-width: 540px;
+}
+.settings-section h3 { font-size: .9rem; margin-bottom: 1rem; color: #bbb; }
+.settings-row { display: flex; align-items: center; gap: .6rem; margin-bottom: .75rem; }
+.settings-row label { font-size: .85rem; color: #888; min-width: 90px; }
+.settings-row input {
+  flex: 1; background: #111; border: 1px solid #444; color: #ddd;
+  padding: .4rem .6rem; border-radius: 4px; font-size: .9rem;
+}
+.settings-row input:focus { outline: none; border-color: #4af; }
+.settings-row button {
+  padding: .4rem .9rem; background: #222; border: 1px solid #444;
+  color: #bbb; border-radius: 4px; cursor: pointer; font-size: .85rem;
+}
+.settings-row button:hover { border-color: #4af; color: #4af; }
+.status-msg { font-size: .82rem; margin-top: .5rem; min-height: 1.2em; }
+.status-msg.ok { color: #4f8; }
+.status-msg.err { color: #f64; }
+.status-msg.info { color: #aaa; }
+
+/* ── engine-select modal ── */
+.eng-modal-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.78); z-index: 1000;
+  align-items: center; justify-content: center;
+}
+.eng-modal-overlay.visible { display: flex; }
+.eng-modal {
+  background: #1a1a1a; border: 1px solid #555; border-radius: 8px;
+  padding: 1.5rem; width: 280px;
+}
+.eng-modal h3 { font-size: .95rem; color: #ddd; margin-bottom: .3rem; }
+.eng-modal p  { font-size: .8rem;  color: #666; margin-bottom: 1rem; }
+.eng-modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin-bottom: .75rem; }
+.eng-btn {
+  padding: .6rem; background: #222; border: 1px solid #444;
+  color: #bbb; border-radius: 4px; cursor: pointer; font-size: .9rem; font-weight: 600;
+}
+.eng-btn:hover { border-color: #4af; color: #4af; }
+.eng-btn-cancel { width: 100%; padding: .4rem; background: #111; border: 1px solid #333; color: #555; border-radius: 4px; cursor: pointer; font-size: .82rem; }
+.eng-btn-cancel:hover { color: #888; border-color: #444; }
+
+.search-input {
+  width: 100%; background: #111; border: 1px solid #444; color: #ddd;
+  padding: .4rem .6rem; border-radius: 4px; font-size: .85rem; margin-bottom: .75rem;
+}
+.search-input:focus { outline: none; border-color: #4af; }
+.search-results { max-height: 320px; overflow-y: auto; }
+.dr-row {
+  padding: .4rem .5rem; border-bottom: 1px solid #222; font-size: .78rem;
+}
+.dr-row:last-child { border-bottom: none; }
+.dr-name { color: #ddd; font-family: monospace; }
+.dr-meta { color: #666; margin-top: .1rem; }
+.dr-meta .tag {
+  display: inline-block; margin-right: .4rem;
+  padding: .05rem .3rem; border-radius: 2px; font-size: .7rem;
+}
+.tag.w  { background: #1a3a1a; color: #4f8; }
+.tag.ro { background: #2a1a1a; color: #f64; }
+.tag.unit { background: #1a1a2a; color: #88f; }
+
+/* ── dataref autocomplete (sidebar) ── */
+.dr-ac-wrap { position: relative; }
+.dr-ac-wrap input { width: 100%; background: #111; border: 1px solid #444; color: #ddd; padding: .35rem .5rem; border-radius: 4px; font-size: .82rem; }
+.dr-ac-wrap input:focus { outline: none; border-color: #4af; }
+.dr-ac-drop {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 500;
+  background: #1a1a1a; border: 1px solid #555; border-top: none;
+  border-radius: 0 0 4px 4px; max-height: 200px; overflow-y: auto;
+  box-shadow: 0 4px 12px #0008;
+}
+.dr-ac-opt { padding: .3rem .5rem; cursor: pointer; border-bottom: 1px solid #111; }
+.dr-ac-opt:last-child { border-bottom: none; }
+.dr-ac-opt:hover, .dr-ac-opt.ac-hi { background: #4af2; }
+.dr-ac-name { color: #ddd; font-family: monospace; font-size: .75rem; }
+.dr-ac-w { color: #4f8; font-size: .65rem; margin-left: .3rem; }
+.dr-ac-meta { color: #666; font-size: .68rem; margin-top: .1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+<nav>
+  <h1>X-Plane Panels</h1>
+  <div class="spacer"></div>
+  <span id="xp-badge" class="info">X-Plane —</span>
+  <button id="nav-home" class="active" onclick="showView('home')">Panels</button>
+  <button id="nav-settings" onclick="showView('settings')">Settings</button>
+</nav>
+
+<!-- HOME VIEW -->
+<div id="view-home" class="view active">
+  <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;">
+    <h2 style="font-size:1.1rem;color:#aaa;">Saved Panels</h2>
+    <button class="btn-primary" onclick="newPanel()">+ New Panel</button>
+  </div>
+  <div id="panel-list" class="panel-list"></div>
+</div>
+
+<!-- EDITOR VIEW -->
+<div id="view-editor" class="view">
+  <div class="editor-layout">
+    <div class="editor-topbar">
+      <label>Name</label>
+      <input type="text" id="edit-name" placeholder="Panel name" />
+      <label>Cols</label>
+      <select id="edit-cols">
+        <option>1</option><option>2</option><option>3</option>
+        <option selected>4</option><option>5</option><option>6</option>
+      </select>
+      <label>Rows</label>
+      <select id="edit-rows">
+        <option>1</option><option>2</option><option selected>3</option>
+        <option>4</option><option>5</option><option>6</option>
+      </select>
+      <label>BG</label>
+      <input type="color" id="edit-bg" value="#111111" style="width:36px;height:28px;padding:2px;background:#111;border:1px solid #444;border-radius:4px;cursor:pointer;">
+      <div class="spacer"></div>
+      <button onclick="saveCurrentPanel()" style="background:#4af2;border:1px solid #4af;color:#4af;padding:.4rem .9rem;border-radius:4px;cursor:pointer;font-size:.85rem;">Save</button>
+      <button onclick="showView('home')" style="padding:.4rem .9rem;background:#222;border:1px solid #444;color:#bbb;border-radius:4px;cursor:pointer;font-size:.85rem;">Back</button>
+    </div>
+
+    <!-- left: palette -->
+    <div class="palette">
+      <h4>Instruments</h4>
+      <div class="palette-item" draggable="true" data-type="airspeed">
+        <span class="icon">⏱</span> Airspeed
+      </div>
+      <div class="palette-item" draggable="true" data-type="altimeter">
+        <span class="icon">↕</span> Altimeter
+      </div>
+      <div class="palette-item" draggable="true" data-type="attitude">
+        <span class="icon">✈</span> Attitude
+      </div>
+      <div class="palette-item" draggable="true" data-type="vsi">
+        <span class="icon">↕</span> VSI
+      </div>
+      <div class="palette-item" draggable="true" data-type="heading">
+        <span class="icon">🧭</span> Heading
+      </div>
+      <div class="palette-item" draggable="true" data-type="engine">
+        <span class="icon">⚙</span> Engine N1/N2
+      </div>
+      <div class="palette-item" draggable="true" data-type="flaps">
+        <span class="icon">⬇</span> Flaps
+      </div>
+      <div class="palette-item" draggable="true" data-type="gear">
+        <span class="icon">⬤</span> Gear
+      </div>
+      <div class="palette-item" draggable="true" data-type="egt">
+        <span class="icon">🌡</span> EGT + Fuel Flow
+      </div>
+      <div class="palette-item" draggable="true" data-type="cht">
+        <span class="icon">🔥</span> CHT / Cylinders
+      </div>
+      <div class="palette-item" draggable="true" data-type="egtcyl">
+        <span class="icon">🌡</span> EGT / Cylinders
+      </div>
+      <div class="palette-item" draggable="true" data-type="obs">
+        <span class="icon">🧭</span> OBS / CDI
+      </div>
+      <div class="palette-item" draggable="true" data-type="oil">
+        <span class="icon">🛢</span> Oil Temp + Press
+      </div>
+      <div class="palette-item" draggable="true" data-type="transponder">
+        <span class="icon">📡</span> Transponder
+      </div>
+      <div class="palette-item" draggable="true" data-type="lights">
+        <span class="icon">💡</span> Light Switches
+      </div>
+      <div class="palette-item" draggable="true" data-type="autopilot">
+        <span class="icon">🤖</span> Autopilot
+      </div>
+      <div class="palette-item" draggable="true" data-type="radio">
+        <span class="icon">📻</span> Radio Panel
+      </div>
+      <div class="palette-item" draggable="true" data-type="fuel">
+        <span class="icon">⛽</span> Fuel Tanks
+      </div>
+    </div>
+
+    <!-- centre: grid -->
+    <div class="editor-canvas">
+      <div id="grid-preview" class="grid-preview"></div>
+    </div>
+
+    <!-- right: config sidebar -->
+    <div class="sidebar-right" id="sidebar-right">
+      <h4>Widget Config</h4>
+      <p class="empty-msg">Click a widget to configure it.</p>
+    </div>
+  </div>
+</div>
+
+<!-- SETTINGS VIEW -->
+<div id="view-settings" class="view">
+  <div class="settings-section">
+    <h3>X-Plane Connection</h3>
+    <div class="settings-row">
+      <label>Host</label>
+      <input type="text" id="xp-host" value="localhost" placeholder="localhost or 192.168.x.x" />
+      <button onclick="testConnection()">Test</button>
+    </div>
+    <div class="status-msg info" id="conn-status">Enter host and click Test.</div>
+  </div>
+
+  <div class="settings-section">
+    <h3>DataRefs.txt</h3>
+    <div class="settings-row" style="gap:.5rem;">
+      <button onclick="loadRegistry()">Load / Refresh</button>
+      <span id="registry-status" style="font-size:.82rem;color:#666;">Loading…</span>
+    </div>
+    <input class="search-input" id="dr-search" placeholder="Search DataRefs…" oninput="searchDatarefs(this.value)" />
+    <div class="search-results" id="dr-results"></div>
+  </div>
+</div>
+
+<!-- Engine-select modal -->
+<div id="eng-modal" class="eng-modal-overlay">
+  <div class="eng-modal">
+    <h3 id="eng-modal-title">Select Engine</h3>
+    <p id="eng-modal-msg">Which engine should this instrument monitor?</p>
+    <div class="eng-modal-grid" id="eng-modal-btns"></div>
+    <button class="eng-btn-cancel" id="eng-modal-cancel">Cancel — don't add</button>
+  </div>
+</div>
+
+<script type="module">
+import * as api from './js/xplane-api.js'
+import * as registry from './js/dataref-registry.js'
+import { listPanels, getPanel, savePanel, deletePanel, createPanel } from './js/panel-store.js'
+
+// ── globals ──────────────────────────────────────────────────────────────────
+let _editingPanel = null   // panel object being edited
+let _dragType = null       // instrument type being dragged from palette
+let _selectedWidgetId = null
+let _regReady = false      // community registry loaded
+let _xpDatarefs = []       // live datarefs from X-Plane [{name, is_writable}]
+
+const ENGINE_INDEX_TYPES = new Set(['egt', 'oil', 'cht', 'egtcyl'])
+const ENGINE_TYPE_NAMES  = { egt: 'EGT + Fuel Flow', oil: 'Oil Temp + Press', cht: 'CHT / Cylinders', egtcyl: 'EGT / Cylinders' }
+const NAV_INDEX_TYPES    = new Set(['obs'])
+const NAV_TYPE_NAMES     = { obs: 'OBS / CDI' }
+
+window.showView = showView
+window.newPanel = newPanel
+window.editPanel = editPanel
+window.openPanel = openPanel
+window.deleteP = deletePanelById
+window.testConnection = testConnection
+window.loadRegistry = loadRegistryUI
+window.searchDatarefs = searchDatarefs
+window.saveCurrentPanel = saveCurrentPanel
+
+// ── view switching ─────────────────────────────────────────────────────────
+async function showView(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'))
+  document.querySelectorAll('nav button[id^=nav]').forEach(b => b.classList.remove('active'))
+  document.getElementById('view-' + name)?.classList.add('active')
+  document.getElementById('nav-' + name)?.classList.add('active')
+  if (name === 'home') await renderHome()
+}
+
+// ── home ────────────────────────────────────────────────────────────────────
+async function renderHome() {
+  const panels = await listPanels()
+  const list = document.getElementById('panel-list')
+  if (panels.length === 0) {
+    list.innerHTML = '<p class="empty-state">No panels yet. Click "+ New Panel" to create one.</p>'
+    return
+  }
+  list.innerHTML = panels.map(p => `
+    <div class="panel-card">
+      <h3>${esc(p.name)}</h3>
+      <div class="meta">${p.columns}×${p.rows} grid · ${p.widgets.length} widget${p.widgets.length !== 1 ? 's' : ''}</div>
+      <div class="actions">
+        <button class="open" onclick="openPanel('${p.id}')">Open</button>
+        <button onclick="editPanel('${p.id}')">Edit</button>
+        <button class="del" onclick="deleteP('${p.id}')">Delete</button>
+      </div>
+    </div>`).join('')
+}
+
+async function newPanel() {
+  const p = await createPanel('New Panel')
+  await editPanel(p.id)
+}
+
+async function editPanel(id) {
+  _editingPanel = await getPanel(id)
+  if (!_editingPanel) return
+  document.getElementById('edit-name').value = _editingPanel.name
+  document.getElementById('edit-cols').value = String(_editingPanel.columns)
+  document.getElementById('edit-rows').value = String(_editingPanel.rows)
+  document.getElementById('edit-bg').value = _editingPanel.background || '#111111'
+  _selectedWidgetId = null
+  showView('editor')
+  renderGrid()
+}
+
+function openPanel(id) {
+  const host = localStorage.getItem('xplane_host') || 'localhost'
+  window.open(`panel.html?id=${id}&host=${encodeURIComponent(host)}`, '_blank')
+}
+
+async function deletePanelById(id) {
+  if (!confirm('Delete this panel?')) return
+  await deletePanel(id)
+  await renderHome()
+}
+
+// ── editor ───────────────────────────────────────────────────────────────────
+async function saveCurrentPanel() {
+  if (!_editingPanel) return
+  _editingPanel.name       = document.getElementById('edit-name').value || 'Panel'
+  _editingPanel.columns    = parseInt(document.getElementById('edit-cols').value, 10)
+  _editingPanel.rows       = parseInt(document.getElementById('edit-rows').value, 10)
+  _editingPanel.background = document.getElementById('edit-bg').value
+  await savePanel(_editingPanel)
+  showView('home')
+}
+
+document.getElementById('edit-cols').addEventListener('change', () => {
+  if (!_editingPanel) return
+  _editingPanel.columns = parseInt(document.getElementById('edit-cols').value, 10)
+  // remove widgets that fall outside new dimensions
+  _editingPanel.widgets = _editingPanel.widgets.filter(
+    w => w.col <= _editingPanel.columns && w.row <= _editingPanel.rows)
+  renderGrid()
+})
+document.getElementById('edit-rows').addEventListener('change', () => {
+  if (!_editingPanel) return
+  _editingPanel.rows = parseInt(document.getElementById('edit-rows').value, 10)
+  _editingPanel.widgets = _editingPanel.widgets.filter(
+    w => w.col <= _editingPanel.columns && w.row <= _editingPanel.rows)
+  renderGrid()
+})
+
+function renderGrid() {
+  const { columns, rows, widgets } = _editingPanel
+  const preview = document.getElementById('grid-preview')
+  const CELL_H = 90
+  preview.style.gridTemplateColumns = `repeat(${columns}, 1fr)`
+  preview.style.gridTemplateRows    = `repeat(${rows}, ${CELL_H}px)`
+  preview.innerHTML = ''
+
+  const occupied = new Map() // "col,row" → widgetId
+  for (const w of widgets) {
+    for (let c = w.col; c < w.col + (w.colSpan || 1); c++)
+      for (let r = w.row; r < w.row + (w.rowSpan || 1); r++)
+        occupied.set(`${c},${r}`, w.id)
+  }
+
+  for (let r = 1; r <= rows; r++) {
+    for (let c = 1; c <= columns; c++) {
+      const key = `${c},${r}`
+      if (occupied.has(key)) {
+        const orig = widgets.find(w => w.id === occupied.get(key))
+        if (!orig || orig.col !== c || orig.row !== r) continue
+      }
+
+      const cell = document.createElement('div')
+      cell.className = 'grid-cell'
+      cell.dataset.col = c
+      cell.dataset.row = r
+      cell.style.gridColumn = c
+      cell.style.gridRow = r
+
+      const widget = widgets.find(w => w.col === c && w.row === r)
+      if (widget) {
+        cell.classList.add('occupied')
+        if (widget.colSpan > 1) cell.style.gridColumnEnd = `span ${widget.colSpan}`
+        if (widget.rowSpan > 1) cell.style.gridRowEnd    = `span ${widget.rowSpan}`
+        const tile = document.createElement('div')
+        tile.className = 'widget-tile' + (widget.id === _selectedWidgetId ? ' selected' : '')
+        tile.innerHTML = `
+          <span class="wicon">${ICONS[widget.type] || '?'}</span>
+          <span class="wlabel">${widget.type}</span>
+          <button class="wremove" title="Remove">×</button>`
+        tile.querySelector('.wremove').addEventListener('click', e => {
+          e.stopPropagation()
+          _editingPanel.widgets = _editingPanel.widgets.filter(w => w.id !== widget.id)
+          if (_selectedWidgetId === widget.id) _selectedWidgetId = null
+          renderGrid()
+          renderSidebar()
+        })
+        tile.addEventListener('click', () => {
+          _selectedWidgetId = widget.id
+          renderGrid()
+          renderSidebar(widget)
+        })
+        cell.appendChild(tile)
+      } else {
+        // droppable empty cell
+        cell.addEventListener('dragover', e => { e.preventDefault(); cell.classList.add('drag-over') })
+        cell.addEventListener('dragleave', () => cell.classList.remove('drag-over'))
+        cell.addEventListener('drop', e => {
+          e.preventDefault()
+          cell.classList.remove('drag-over')
+          const type = e.dataTransfer.getData('text/plain') || _dragType
+          if (!type) return
+          _addWidget(type, parseInt(cell.dataset.col, 10), parseInt(cell.dataset.row, 10))
+        })
+      }
+
+      preview.appendChild(cell)
+    }
+  }
+}
+
+
+function _addWidget(type, col, row) {
+  if (ENGINE_INDEX_TYPES.has(type)) {
+    _showEngineModal(type, col, row)
+  } else if (NAV_INDEX_TYPES.has(type)) {
+    _showNavModal(type, col, row)
+  } else {
+    _createWidget(type, col, row, {})
+  }
+}
+
+function _createWidget(type, col, row, config) {
+  const id = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)
+  _editingPanel.widgets.push({ id, type, col, row, colSpan: 1, rowSpan: 1, datarefs: {}, config })
+  renderGrid()
+}
+
+function _showNavModal(type, col, row) {
+  const modal  = document.getElementById('eng-modal')
+  const btnsEl = document.getElementById('eng-modal-btns')
+  document.getElementById('eng-modal-title').textContent = `Select NAV Radio — ${NAV_TYPE_NAMES[type] || type}`
+  document.getElementById('eng-modal-msg').textContent   = 'Which NAV radio should this instrument use?'
+  btnsEl.innerHTML = [1, 2].map(n =>
+    `<button class="eng-btn" data-idx="${n - 1}">NAV ${n}</button>`
+  ).join('')
+  btnsEl.querySelectorAll('.eng-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      modal.classList.remove('visible')
+      _createWidget(type, col, row, { navIndex: parseInt(btn.dataset.idx, 10) })
+    })
+  })
+  document.getElementById('eng-modal-cancel').onclick = () => modal.classList.remove('visible')
+  modal.classList.add('visible')
+}
+
+function _showEngineModal(type, col, row) {
+  const modal   = document.getElementById('eng-modal')
+  const btnsEl  = document.getElementById('eng-modal-btns')
+  const name    = ENGINE_TYPE_NAMES[type] || type
+  document.getElementById('eng-modal-title').textContent = `Select Engine — ${name}`
+  document.getElementById('eng-modal-msg').textContent   = 'Which engine should this instrument monitor?'
+
+  btnsEl.innerHTML = [1, 2, 3, 4].map(n =>
+    `<button class="eng-btn" data-idx="${n - 1}">ENG ${n}</button>`
+  ).join('')
+
+  btnsEl.querySelectorAll('.eng-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      modal.classList.remove('visible')
+      _createWidget(type, col, row, { engineIndex: parseInt(btn.dataset.idx, 10) })
+    })
+  })
+
+  document.getElementById('eng-modal-cancel').onclick = () => modal.classList.remove('visible')
+  modal.classList.add('visible')
+}
+
+// palette drag
+document.querySelectorAll('.palette-item').forEach(item => {
+  item.addEventListener('dragstart', e => {
+    _dragType = item.dataset.type
+    e.dataTransfer.setData('text/plain', _dragType)
+    e.dataTransfer.effectAllowed = 'copy'
+  })
+})
+
+// ── sidebar ──────────────────────────────────────────────────────────────────
+function renderSidebar(widget) {
+  const sb = document.getElementById('sidebar-right')
+  if (!widget) {
+    sb.innerHTML = '<h4>Widget Config</h4><p class="empty-msg">Click a widget to configure it.</p>'
+    return
+  }
+  let extraConfig = ''
+  if (widget.type === 'engine') {
+    extraConfig = `<div class="field-row">
+      <label>Engines</label>
+      <select data-cfg="engineCount">
+        ${[1,2,3,4].map(n => `<option value="${n}"${(widget.config.engineCount||2)==n?' selected':''}>${n}</option>`).join('')}
+      </select>
+    </div>`
+  }
+  if (ENGINE_INDEX_TYPES.has(widget.type)) {
+    extraConfig = `<div class="field-row">
+      <label>Engine</label>
+      <select data-cfg="engineIndex">
+        ${[0,1,2,3].map(n => `<option value="${n}"${(widget.config.engineIndex??0)==n?' selected':''}>ENG ${n+1}</option>`).join('')}
+      </select>
+    </div>`
+  }
+  if (NAV_INDEX_TYPES.has(widget.type)) {
+    extraConfig = `<div class="field-row">
+      <label>NAV Radio</label>
+      <select data-cfg="navIndex">
+        ${[0,1].map(n => `<option value="${n}"${(widget.config.navIndex??0)==n?' selected':''}>NAV ${n+1}</option>`).join('')}
+      </select>
+    </div>`
+  }
+  if (widget.type === 'radio') {
+    const active = Array.isArray(widget.config.radios)
+      ? widget.config.radios
+      : ['com1','com2','nav1','nav2']
+    const radioOpts = [
+      { id:'com1', label:'COM 1' }, { id:'com2', label:'COM 2' },
+      { id:'nav1', label:'NAV 1' }, { id:'nav2', label:'NAV 2' },
+      { id:'adf1', label:'ADF 1' }, { id:'adf2', label:'ADF 2' },
+    ]
+    extraConfig = radioOpts.map(r => `
+      <div class="field-row">
+        <label>${r.label}</label>
+        <input type="checkbox" data-radio-id="${r.id}" ${active.includes(r.id) ? 'checked' : ''} />
+      </div>`).join('')
+  }
+
+  sb.innerHTML = `
+    <h4>Widget Config</h4>
+    <div class="field-row"><label>Type</label><span style="font-size:.82rem;color:#aaa;">${widget.type}</span></div>
+    <div class="field-row">
+      <label>Col Span</label>
+      <input type="number" min="1" max="${_editingPanel.columns}" data-cfg="colSpan" value="${widget.colSpan||1}" />
+    </div>
+    <div class="field-row">
+      <label>Row Span</label>
+      <input type="number" min="1" max="${_editingPanel.rows}" data-cfg="rowSpan" value="${widget.rowSpan||1}" />
+    </div>
+    <h4 style="margin-top:.75rem;">DataRef Overrides</h4>
+    <div id="dr-fields"></div>
+    ${extraConfig ? '<h4 style="margin-top:.75rem;">Options</h4>' + extraConfig : ''}
+  `
+
+  const drContainer = document.getElementById('dr-fields')
+  const defaults = DATAREF_DEFAULTS[widget.type] || {}
+  for (const [key, def] of Object.entries(defaults))
+    drContainer.appendChild(_createDrInput(key, widget, def))
+
+  sb.querySelectorAll('input[data-cfg], select[data-cfg]').forEach(inp => {
+    inp.addEventListener('change', () => {
+      const key = inp.dataset.cfg
+      const val = (inp.type === 'number' || key === 'engineIndex' || key === 'navIndex') ? parseInt(inp.value, 10) : inp.value
+      if (key === 'colSpan' || key === 'rowSpan') {
+        widget[key] = val
+        renderGrid()
+      } else {
+        widget.config[key] = val
+      }
+    })
+  })
+  sb.querySelectorAll('input[data-radio-id]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const checked = [...sb.querySelectorAll('input[data-radio-id]:checked')]
+        .map(el => el.dataset.radioId)
+      widget.config.radios = checked
+    })
+  })
+}
+
+// ── settings ──────────────────────────────────────────────────────────────────
+const hostInput = document.getElementById('xp-host')
+hostInput.value = localStorage.getItem('xplane_host') ||  window.location.hostname //'localhost'
+hostInput.addEventListener('change', () => localStorage.setItem('xplane_host', hostInput.value.trim()))
+
+function _xpBase(host) {
+  /* Use a relative URL when testing the server we were loaded from,
+     absolute on the same port when testing a different host. */
+  const same = (host === window.location.hostname || host === 'localhost')
+  return same ? '' : `http://${host}:${window.location.port || 8088}`
+}
+
+async function testConnection(silent = false) {
+  const host = hostInput.value.trim() || 'localhost'
+  localStorage.setItem('xplane_host', host)
+  const el   = document.getElementById('conn-status')
+  const badge = document.getElementById('xp-badge')
+  if (!silent) { el.className = 'status-msg info'; el.textContent = 'Connecting…' }
+  badge.className = 'info'; badge.textContent = 'X-Plane —'
+  try {
+    const base = _xpBase(host)
+    const res  = await fetch(`${base}/api/capabilities`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const json = await res.json()
+    const ver  = json['x-plane']?.version ?? '?'
+    el.className  = 'status-msg ok'
+    el.textContent = `Connected to X-Plane ${ver}`
+    badge.className = 'ok'; badge.textContent = `X-Plane ${ver}`
+
+    /* Also prime the live dataref list if not already done */
+    if (_xpDatarefs.length === 0) {
+      fetch(`${base}/api/v3/datarefs?limit=10000`)
+        .then(r => r.ok ? r.json() : null)
+        .then(j => { if (j) _xpDatarefs = j.data || [] })
+        .catch(() => {})
+    }
+  } catch (e) {
+    el.className  = 'status-msg err'
+    el.textContent = `Connection failed: ${e.message}`
+    badge.className = 'err'; badge.textContent = 'X-Plane offline'
+  }
+}
+
+async function loadRegistryUI() {
+  const el = document.getElementById('registry-status')
+  el.textContent = 'Loading…'
+  try {
+    const result = await registry.loadRegistry()
+    _regReady = true
+    el.textContent = `Loaded ${result.count.toLocaleString()} entries${result.fromCache ? ' (cached)' : ''}`
+  } catch (e) {
+    el.textContent = `Failed: ${e.message}`
+  }
+}
+
+// ── dataref index (auto-loaded at startup) ────────────────────────────────────
+
+async function _autoLoadDrSources() {
+  // Community registry — has descriptions, units, writable flags
+  registry.loadRegistry().then(r => {
+    _regReady = true
+    const el = document.getElementById('registry-status')
+    if (el) el.textContent = `${r.count.toLocaleString()} entries loaded${r.fromCache ? ' (cached)' : ''}`
+  }).catch(() => {})
+
+  // Live X-Plane datarefs via plugin — no descriptions but always current
+  try {
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), 5000)
+    const res = await fetch('/api/v3/datarefs?limit=10000', { signal: ctrl.signal })
+    clearTimeout(t)
+    if (res.ok) {
+      const json = await res.json()
+      _xpDatarefs = json.data || []
+    }
+  } catch(e) {}
+}
+
+function _searchDr(q, limit = 24) {
+  if (!q || q.length < 2) return []
+  const results = []
+  const seen = new Set()
+  if (_regReady) {
+    for (const r of registry.search(q, limit)) {
+      seen.add(r.name); results.push(r)
+    }
+  }
+  if (results.length < limit && _xpDatarefs.length > 0) {
+    const ql = q.toLowerCase()
+    for (const dr of _xpDatarefs) {
+      if (results.length >= limit) break
+      if (!seen.has(dr.name) && dr.name.toLowerCase().includes(ql)) {
+        results.push({ name: dr.name, writable: dr.is_writable, units: '', description: '' })
+        seen.add(dr.name)
+      }
+    }
+  }
+  return results
+}
+
+function _createDrInput(key, widget, placeholder) {
+  const wrap = document.createElement('div')
+  wrap.className = 'field-row'
+
+  const label = document.createElement('label')
+  label.textContent = key
+  wrap.appendChild(label)
+
+  const acWrap = document.createElement('div')
+  acWrap.className = 'dr-ac-wrap'
+
+  const inp = document.createElement('input')
+  inp.type = 'text'
+  inp.value = widget.datarefs[key] || ''
+  inp.placeholder = placeholder || ''
+
+  const drop = document.createElement('div')
+  drop.className = 'dr-ac-drop'
+  drop.style.display = 'none'
+
+  let debTimer = null
+  let hiIdx = -1
+
+  function opts() { return [...drop.querySelectorAll('.dr-ac-opt')] }
+
+  function showDrop(results) {
+    if (!results.length) { drop.style.display = 'none'; return }
+    drop.innerHTML = results.map(r => {
+      const meta = [
+        r.units       ? `<span style="color:#88f">${esc(r.units)}</span>` : '',
+        r.description ? esc(r.description) : ''
+      ].filter(Boolean).join(' · ')
+      return `<div class="dr-ac-opt" data-name="${esc(r.name)}">
+        <div class="dr-ac-name">${esc(r.name)}${r.writable ? '<span class="dr-ac-w">W</span>' : ''}</div>
+        ${meta ? `<div class="dr-ac-meta">${meta}</div>` : ''}
+      </div>`
+    }).join('')
+    drop.style.display = 'block'
+    hiIdx = -1
+    drop.querySelectorAll('.dr-ac-opt').forEach(opt =>
+      opt.addEventListener('mousedown', e => { e.preventDefault(); commit(opt.dataset.name) })
+    )
+  }
+
+  function commit(name) {
+    inp.value = name
+    if (name.trim()) widget.datarefs[key] = name.trim()
+    else delete widget.datarefs[key]
+    drop.style.display = 'none'
+  }
+
+  inp.addEventListener('input', () => {
+    clearTimeout(debTimer)
+    debTimer = setTimeout(() => showDrop(_searchDr(inp.value.trim())), 150)
+  })
+
+  inp.addEventListener('keydown', e => {
+    const list = opts()
+    if (!list.length) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      hiIdx = Math.min(hiIdx + 1, list.length - 1)
+      list.forEach((o, i) => o.classList.toggle('ac-hi', i === hiIdx))
+      list[hiIdx]?.scrollIntoView({ block: 'nearest' })
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      hiIdx = Math.max(hiIdx - 1, 0)
+      list.forEach((o, i) => o.classList.toggle('ac-hi', i === hiIdx))
+      list[hiIdx]?.scrollIntoView({ block: 'nearest' })
+    } else if (e.key === 'Enter' && hiIdx >= 0) {
+      e.preventDefault(); commit(list[hiIdx].dataset.name)
+    } else if (e.key === 'Escape') {
+      drop.style.display = 'none'
+    }
+  })
+
+  inp.addEventListener('change', () => {
+    if (inp.value.trim()) widget.datarefs[key] = inp.value.trim()
+    else delete widget.datarefs[key]
+  })
+
+  inp.addEventListener('blur', () => setTimeout(() => { drop.style.display = 'none' }, 160))
+
+  acWrap.appendChild(inp)
+  acWrap.appendChild(drop)
+  wrap.appendChild(acWrap)
+  return wrap
+}
+
+function searchDatarefs(q) {
+  if (!q.trim()) { document.getElementById('dr-results').innerHTML = ''; return }
+  const results = registry.search(q, 40)
+  document.getElementById('dr-results').innerHTML = results.map(r => `
+    <div class="dr-row">
+      <div class="dr-name">${esc(r.name)}</div>
+      <div class="dr-meta">
+        <span class="tag ${r.writable ? 'w' : 'ro'}">${r.writable ? 'W' : 'RO'}</span>
+        ${r.units ? `<span class="tag unit">${esc(r.units)}</span>` : ''}
+        ${r.description ? `<span style="color:#555;">${esc(r.description)}</span>` : ''}
+      </div>
+    </div>`).join('') || '<div style="padding:.5rem;color:#555;font-size:.8rem;">No results.</div>'
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+}
+
+const ICONS = {
+  airspeed: '⏱', altimeter: '↕', attitude: '✈', vsi: '↕', heading: '🧭', engine: '⚙',
+  flaps: '⬇', gear: '⬤', egt: '🌡', cht: '🔥', egtcyl: '🌡', oil: '🛢', obs: '🧭', transponder: '📡', lights: '💡',
+  autopilot: '🤖', radio: '📻', fuel: '⛽',
+}
+
+const DATAREF_DEFAULTS = {
+  airspeed:  { kias: 'sim/cockpit2/gauges/indicators/airspeed_kts_pilot' },
+  altimeter: { altitude_ft: 'sim/cockpit2/gauges/indicators/altitude_ft_pilot', baro_setting: 'sim/cockpit2/gauges/actuators/barometer_setting_in_hg_pilot' },
+  attitude:  { pitch_deg: 'sim/flightmodel/position/theta', roll_deg: 'sim/flightmodel/position/phi', slip_deg: 'sim/cockpit2/gauges/indicators/slip_deg' },
+  vsi:       { vvi_fpm: 'sim/cockpit2/gauges/indicators/vvi_fpm_pilot' },
+  heading:   { heading_deg: 'sim/cockpit2/gauges/indicators/heading_electric_deg_mag_pilot', bug_deg: 'sim/cockpit/autopilot/heading_mag' },
+  engine:    { n1_array: 'sim/flightmodel/engine/ENGN_N1_', n2_array: 'sim/flightmodel/engine/ENGN_N2_' },
+  flaps:     { flap_handle: 'sim/cockpit2/controls/flap_handle_deploy_ratio', flap_actual: 'sim/flightmodel2/controls/flap1_deploy_ratio' },
+  gear:      { gear_handle: 'sim/cockpit/switches/gear_handle_status', gear_deploy: 'sim/flightmodel2/gear/deploy_ratio' },
+  egt:       { egt: 'sim/cockpit2/engine/indicators/EGT_deg_C', ff: 'sim/cockpit2/engine/indicators/fuel_flow_kg_sec' },
+  cht:       { cht: 'sim/cockpit2/engine/indicators/CHT_CYL_deg_C', cht_avg: 'sim/cockpit2/engine/indicators/CHT_deg_C', egt: 'sim/cockpit2/engine/indicators/EGT_deg_C' },
+  egtcyl:    { egt: 'sim/cockpit2/engine/indicators/EGT_CYL_deg_C', egt_avg: 'sim/cockpit2/engine/indicators/EGT_deg_C' },
+  obs: {
+    nav1_obs: 'sim/cockpit2/radios/actuators/nav1_obs_deg_mag_pilot', nav1_hdef: 'sim/cockpit/radios/nav1_hdef_dot',
+    nav1_fromto: 'sim/cockpit/radios/nav1_fromto', nav1_gs_flag: 'sim/cockpit/radios/nav1_flag_glideslope', nav1_vdef: 'sim/cockpit/radios/nav1_vdef_dot',
+    nav2_obs: 'sim/cockpit2/radios/actuators/nav2_obs_deg_mag_pilot', nav2_hdef: 'sim/cockpit/radios/nav2_hdef_dot',
+    nav2_fromto: 'sim/cockpit/radios/nav2_fromto', nav2_gs_flag: 'sim/cockpit/radios/nav2_flag_glideslope', nav2_vdef: 'sim/cockpit/radios/nav2_vdef_dot',
+  },
+  oil:         { oil_temp: 'sim/cockpit2/engine/indicators/oil_temperature_deg_C', oil_press: 'sim/cockpit2/engine/indicators/oil_pressure_psi' },
+  transponder: { code: 'sim/cockpit/radios/transponder_code', mode: 'sim/cockpit/radios/transponder_mode', ident: 'sim/cockpit/radios/transponder_id' },
+  lights: {
+    landing:   'sim/cockpit2/switches/landing_lights_on',
+    taxi:      'sim/cockpit2/switches/taxi_light_on',
+    nav:       'sim/cockpit2/switches/navigation_lights_on',
+    beacon:    'sim/cockpit2/switches/beacon_on',
+    strobe:    'sim/cockpit2/switches/strobe_lights_on',
+    logo:      'sim/cockpit2/switches/logo_lights_on',
+    wing:      'sim/cockpit2/switches/wing_lights_on',
+    formation: 'sim/cockpit2/switches/formation_lights_on',
+  },
+  autopilot: {
+    ap_on:          'sim/cockpit2/autopilot/autopilot_on',
+    fd_mode:        'sim/cockpit2/autopilot/flight_director_mode',
+    heading_dial:   'sim/cockpit2/autopilot/heading_dial_deg_mag_pilot',
+    altitude_dial:  'sim/cockpit2/autopilot/altitude_dial_ft',
+    vvi_dial:       'sim/cockpit2/autopilot/vvi_dial_fpm',
+    airspeed_dial:  'sim/cockpit2/autopilot/airspeed_dial_kts',
+    heading_mode:   'sim/cockpit2/autopilot/heading_mode',
+    altitude_mode:  'sim/cockpit2/autopilot/altitude_mode',
+    athr_on:        'sim/cockpit2/autopilot/autothrottle_on',
+    athr_arm:       'sim/cockpit2/autopilot/autothrottle_arm',
+    hnav_armed:     'sim/cockpit2/autopilot/hnav_armed',
+    glideslope_armed: 'sim/cockpit2/autopilot/glideslope_armed',
+    alt_hold_armed: 'sim/cockpit2/autopilot/altitude_hold_armed',
+    bkcrse_on:      'sim/cockpit2/autopilot/backcourse_on',
+    heading_status: 'sim/cockpit2/autopilot/heading_status',
+    nav_status:     'sim/cockpit2/autopilot/nav_status',
+    alt_hold_status:'sim/cockpit2/autopilot/altitude_hold_status',
+    vvi_status:     'sim/cockpit2/autopilot/vvi_status',
+    speed_status:   'sim/cockpit2/autopilot/speed_status',
+    gls_status:     'sim/cockpit2/autopilot/glideslope_status',
+    TOGA_status:    'sim/cockpit2/autopilot/TOGA_status',
+  },
+  radio: {
+    com1_mhz:     'sim/cockpit2/radios/actuators/com1_frequency_Mhz',
+    com1_khz:     'sim/cockpit2/radios/actuators/com1_frequency_khz',
+    com1_sby_mhz: 'sim/cockpit2/radios/actuators/com1_standby_frequency_Mhz',
+    com1_sby_khz: 'sim/cockpit2/radios/actuators/com1_standby_frequency_khz',
+    com1_rx:      'sim/cockpit2/radios/actuators/audio_selection_com1',
+    com2_mhz:     'sim/cockpit2/radios/actuators/com2_frequency_Mhz',
+    com2_khz:     'sim/cockpit2/radios/actuators/com2_frequency_khz',
+    com2_sby_mhz: 'sim/cockpit2/radios/actuators/com2_standby_frequency_Mhz',
+    com2_sby_khz: 'sim/cockpit2/radios/actuators/com2_standby_frequency_khz',
+    com2_rx:      'sim/cockpit2/radios/actuators/audio_selection_com2',
+    nav1_mhz:     'sim/cockpit2/radios/actuators/nav1_frequency_Mhz',
+    nav1_khz:     'sim/cockpit2/radios/actuators/nav1_frequency_khz',
+    nav1_sby_mhz: 'sim/cockpit2/radios/actuators/nav1_standby_frequency_Mhz',
+    nav1_sby_khz: 'sim/cockpit2/radios/actuators/nav1_standby_frequency_khz',
+    nav1_rx:      'sim/cockpit2/radios/actuators/audio_selection_nav1',
+    nav2_mhz:     'sim/cockpit2/radios/actuators/nav2_frequency_Mhz',
+    nav2_khz:     'sim/cockpit2/radios/actuators/nav2_frequency_khz',
+    nav2_sby_mhz: 'sim/cockpit2/radios/actuators/nav2_standby_frequency_Mhz',
+    nav2_sby_khz: 'sim/cockpit2/radios/actuators/nav2_standby_frequency_khz',
+    nav2_rx:      'sim/cockpit2/radios/actuators/audio_selection_nav2',
+    adf1_hz:      'sim/cockpit2/radios/actuators/adf1_frequency_hz',
+    adf1_sby_hz:  'sim/cockpit2/radios/actuators/adf1_standby_frequency_hz',
+    adf1_rx:      'sim/cockpit2/radios/actuators/audio_selection_adf1',
+    adf2_hz:      'sim/cockpit2/radios/actuators/adf2_frequency_hz',
+    adf2_sby_hz:  'sim/cockpit2/radios/actuators/adf2_standby_frequency_hz',
+    adf2_rx:      'sim/cockpit2/radios/actuators/audio_selection_adf2',
+  },
+  fuel: { fuel_qty: 'sim/cockpit2/fuel/fuel_quantity' },
+}
+
+// init
+;(async () => {
+  await renderHome()
+  testConnection(true)    // silent — updates nav badge, no spinner in Settings
+  _autoLoadDrSources()
+})()
+</script>
+</body>
+</html>
