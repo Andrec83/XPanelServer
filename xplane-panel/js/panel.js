@@ -50,7 +50,7 @@ const hostParam = params.get('host')
 // it may be absent; the system will gracefully ignore undefined values.
 const AMBIENT_DREFS = {
   brightness: 'sim/cockpit2/switches/instrument_brightness_ratio',
-  flood:      'sim/cockpit/electrical/flood_lights_on',
+  flood:      'sim/cockpit2/switches/panel_brightness_ratio',
   hypoxia:    'sim/cockpit2/oxygen/indicators/pilot_felt_altitude_ft',
   // Sun elevation above horizon in degrees. Positive = day, negative = below horizon.
   // Used to gate the backlight: instruments stay white in daylight even if the rheostat is on.
@@ -432,10 +432,10 @@ function _applyProfile(profile, instruments) {
 // Reads ambient datarefs from the flat state object and calls setAmbient() on
 // all instruments whenever a value changes. Called on every WS delta.
 
-// Sun pitch thresholds for the darkness ramp.
-// Above SUN_DAY → full daylight (darkness=0), below SUN_NIGHT → full dark (darkness=1).
-const SUN_DAY   =  10   // degrees above horizon — instruments always white above this
-const SUN_NIGHT =  -6   // civil twilight — instruments fully respond to rheostat below this
+// Sun pitch thresholds for the ambient light ramp.
+// Above SUN_DAY → full daylight (ambientLight=1), below SUN_NIGHT → full dark (ambientLight=0).
+const SUN_DAY   =  10   // degrees above horizon
+const SUN_NIGHT =  -6   // civil twilight
 
 function _broadcastAmbient(state, instruments) {
   const brightnessRaw = state[AMBIENT_DREFS.brightness]
@@ -454,28 +454,28 @@ function _broadcastAmbient(state, instruments) {
     console.groupEnd()
   }
 
-  // brightness is float[32] — one entry per rheostat circuit; index 0 is the main instrument panel
-  const brightness = Array.isArray(brightnessRaw) ? (brightnessRaw[0] ?? 0) : (brightnessRaw ?? 0)
-  const flood      = floodRaw ? 1 : 0
-  const feltAlt    = hypoxiaRaw ?? 0
-  const hypoxia    = feltAlt <= HYPOXIA_LO ? 0
-                   : Math.min(1, (feltAlt - HYPOXIA_LO) / (HYPOXIA_HI - HYPOXIA_LO))
+  // backlitLight: instrument panel rheostat, 0–1 (float[32], index 0 = main panel)
+  const backlitLight = Array.isArray(brightnessRaw) ? (brightnessRaw[0] ?? 0) : (brightnessRaw ?? 0)
+  // flood: panel_brightness_ratio float[n], index 0 = flood knob level 0–1
+  const flood        = Math.max(0, Array.isArray(floodRaw) ? (floodRaw[0] ?? 0) : (floodRaw ?? 0))
+  const feltAlt      = hypoxiaRaw ?? 0
+  const hypoxia      = feltAlt <= HYPOXIA_LO ? 0
+                     : Math.min(1, (feltAlt - HYPOXIA_LO) / (HYPOXIA_HI - HYPOXIA_LO))
 
-  // darkness: 0 at full day, 1 at night. Gates the rheostat so the backlit
-  // amber theme only kicks in when it's actually dark — matching X-Plane's behaviour.
-  const sunPitch = sunPitchRaw ?? SUN_DAY   // default to day if dataref not yet received
-  const darkness = sunPitch >= SUN_DAY  ? 0
-                 : sunPitch <= SUN_NIGHT ? 1
-                 : (SUN_DAY - sunPitch) / (SUN_DAY - SUN_NIGHT)
-  const night = brightness * darkness
+  // ambientLight: how much natural daylight reaches the instruments (0=night, 1=full day).
+  // Defaults to full day until the sun_pitch dataref is first received.
+  const sunPitch    = sunPitchRaw ?? SUN_DAY
+  const ambientLight = sunPitch >= SUN_DAY  ? 1
+                     : sunPitch <= SUN_NIGHT ? 0
+                     : (sunPitch - SUN_NIGHT) / (SUN_DAY - SUN_NIGHT)
 
   const a = _lastAmbient
-  if (a.brightness === brightness && a.flood === flood && a.hypoxia === hypoxia && a.sunPitch === sunPitch) return
+  if (a.brightness === backlitLight && a.flood === flood && a.hypoxia === hypoxia && a.sunPitch === sunPitch) return
 
-  _lastAmbient = { brightness, flood, hypoxia, sunPitch }
-  console.log('[ambient] changed →', { brightness: brightness.toFixed(2), darkness: darkness.toFixed(2), night: night.toFixed(2), flood, hypoxia: hypoxia.toFixed(3) })
+  _lastAmbient = { brightness: backlitLight, flood, hypoxia, sunPitch }
+  console.log('[ambient] changed →', { ambientLight: ambientLight.toFixed(2), backlitLight: backlitLight.toFixed(2), flood, hypoxia: hypoxia.toFixed(3) })
   for (const { instrument } of instruments) {
-    instrument.setAmbient({ night, flood, hypoxia })
+    instrument.setAmbient({ ambientLight, backlitLight, flood, hypoxia })
   }
 }
 

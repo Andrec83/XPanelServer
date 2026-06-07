@@ -51,8 +51,8 @@ export class BaseInstrument {
     this.config = config
     this.values = {}
     this._dirty = true
-    this._theme = { ...DEFAULT_THEME, ...(config.theme || {}) }
-    this._ambient = { night: 0, hypoxia: 0, flood: 0 }
+    this._theme   = { ...DEFAULT_THEME, ...(config.theme || {}) }
+    this._ambient = { ambientLight: 1, backlitLight: 0, hypoxia: 0, flood: 0 }
     this._setupResizeObserver()
     this._startLoop()
   }
@@ -73,21 +73,17 @@ export class BaseInstrument {
     this._dirty = true
   }
 
-  // level: 0 = full day, 1 = full night backlit
-  setNightMode(level) {
-    this._theme = level > 0.35 ? { ...NIGHT_THEME } : { ...DEFAULT_THEME }
-    this._dirty = true
-  }
-
   // Called by panel.js when ambient sim state changes.
-  // night   : instrument brightness ratio 0–1 (from sim/cockpit2/switches/instrument_brightness_ratio)
-  // hypoxia : hypoxia severity 0–1
-  // flood   : flood light level 0–1
-  setAmbient({ night = 0, hypoxia = 0, flood = 0 } = {}) {
-    this._ambient.night   = night
-    this._ambient.hypoxia = hypoxia
-    this._ambient.flood   = flood
-    this.setNightMode(night)
+  // ambientLight : natural daylight reaching instruments, 0–1 (from sun pitch)
+  // backlitLight : panel rheostat level 0–1 (instrument_brightness_ratio[0])
+  // flood        : flood light on/off 0–1
+  // hypoxia      : hypoxia severity 0–1
+  setAmbient({ ambientLight = 1, backlitLight = 0, hypoxia = 0, flood = 0 } = {}) {
+    this._ambient.ambientLight = ambientLight
+    this._ambient.backlitLight = backlitLight
+    this._ambient.hypoxia      = hypoxia
+    this._ambient.flood        = flood
+    this._dirty = true
   }
 
   destroy() {
@@ -126,25 +122,50 @@ export class BaseInstrument {
 
   _render() {}
 
-  // Drawn on top of every instrument frame — driven entirely by _ambient state.
+  // Drawn on top of every instrument frame — handles luminosity and environmental effects.
+  // Luminosity model: visibleBrightness(y) = min(1, ambientLight + backlitLight + floodAtY)
+  // floodAtY falls linearly from `flood` at the top to 0 at the bottom, producing a gradient
+  // darkness overlay that creates the "light from above" perception for flood lights.
+  // No colour tinting is applied — instruments always render in their base colours.
   _drawAmbientOverlays() {
     const { ctx, w, h } = this
-    const { hypoxia, flood } = this._ambient
+    const { ambientLight, backlitLight, hypoxia, flood } = this._ambient
 
-    // Hypoxia: flat black overlay, linearly more opaque as hypoxia increases
-    if (hypoxia > 0.01) {
-      ctx.fillStyle = `rgba(0,0,0,${Math.min(0.97, hypoxia).toFixed(3)})`
+    // ── 1. Darkness gradient ─────────────────────────────────────────────────
+    // Top receives full flood contribution; bottom receives none.
+    const topBrightness    = Math.min(1, ambientLight + backlitLight + flood)
+    const bottomBrightness = Math.min(1, ambientLight + backlitLight)
+    const topDark    = 1 - topBrightness
+    const bottomDark = 1 - bottomBrightness
+
+    if (bottomDark > 0.005 || topDark > 0.005) {
+      if (Math.abs(topDark - bottomDark) < 0.01) {
+        ctx.fillStyle = `rgba(0,0,0,${bottomDark.toFixed(3)})`
+      } else {
+        const gd = ctx.createLinearGradient(0, 0, 0, h)
+        gd.addColorStop(0, `rgba(0,0,0,${topDark.toFixed(3)})`)
+        gd.addColorStop(1, `rgba(0,0,0,${bottomDark.toFixed(3)})`)
+        ctx.fillStyle = gd
+      }
       ctx.fillRect(0, 0, w, h)
     }
 
-    // Flood light: warm amber-white wash from above (glareshield / overhead lamp)
-    if (flood > 0.01) {
-      const a = flood * 0.38
-      const grad = ctx.createLinearGradient(w / 2, 0, w / 2, h * 0.75)
-      grad.addColorStop(0,   `rgba(255,215,110,${a})`)
-      grad.addColorStop(0.45,`rgba(255,200,80,${a * 0.55})`)
-      grad.addColorStop(1,   'rgba(255,200,80,0)')
+    // ── 2. Flood warm colour tint from above ─────────────────────────────────
+    // Brightness handled by the gradient above; this adds only a subtle warm hue.
+    if (flood > 0.005) {
+      const a    = flood * 0.25
+      const grad = ctx.createLinearGradient(0, 0, 0, h)
+      grad.addColorStop(0,    `rgba(255,225,130,${a.toFixed(3)})`)
+      grad.addColorStop(0.35, `rgba(255,210,90,${(a * 0.4).toFixed(3)})`)
+      grad.addColorStop(0.7,  `rgba(255,200,60,${(a * 0.06).toFixed(3)})`)
+      grad.addColorStop(1,    'rgba(255,200,60,0)')
       ctx.fillStyle = grad
+      ctx.fillRect(0, 0, w, h)
+    }
+
+    // ── 3. Hypoxia: full-instrument black overlay ────────────────────────────
+    if (hypoxia > 0.01) {
+      ctx.fillStyle = `rgba(0,0,0,${Math.min(0.97, hypoxia).toFixed(3)})`
       ctx.fillRect(0, 0, w, h)
     }
   }
