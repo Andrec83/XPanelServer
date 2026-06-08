@@ -12,6 +12,17 @@ if(NOT EXISTS "${SDK_DIR}/CHeaders/XPLM/XPLMPlugin.h")
         "and extract to xplane-plugin/sdk/\n")
 endif()
 
+# ── Detect platform ───────────────────────────────────────────────────────────
+if(WIN32)
+    set(XP_PLATFORM "win_x64")
+elseif(APPLE)
+    set(XP_PLATFORM "mac_x64")
+else()
+    set(XP_PLATFORM "lin_x64")
+endif()
+
+message(STATUS "Building for X-Plane platform: ${XP_PLATFORM}")
+
 # ── Download civetweb and cJSON source files only ────────────────────────────
 # We call FetchContent_Populate() directly instead of FetchContent_MakeAvailable()
 # so that add_subdirectory() is NEVER called on either library.
@@ -55,6 +66,19 @@ target_include_directories(XPanelServer PRIVATE
     "${cjson_SOURCE_DIR}"
 )
 
+# Common compile definitions for all platforms
+target_compile_definitions(XPanelServer PRIVATE
+    NO_SSL=1
+    NO_CGI=1
+    USE_WEBSOCKET=1
+    USE_IPV6=0
+)
+
+# ── Output path helper ────────────────────────────────────────────────────────
+# X-Plane requires:  <PluginName>/<platform>/XPanelServer.xpl
+# where <platform>  is  win_x64 | mac_x64 | lin_x64
+set(_DIST "${CMAKE_BINARY_DIR}/dist/XPanelServer/${XP_PLATFORM}")
+
 # ── Windows x64 ───────────────────────────────────────────────────────────────
 if(WIN32)
     target_compile_definitions(XPanelServer PRIVATE
@@ -63,21 +87,15 @@ if(WIN32)
         _WIN32_WINNT=0x0602
         WIN32_LEAN_AND_MEAN
         _CRT_SECURE_NO_WARNINGS
-        NO_SSL=1
-        NO_CGI=1
-        USE_WEBSOCKET=1
-        USE_IPV6=0
     )
 
     target_link_libraries(XPanelServer PRIVATE
         "${SDK_DIR}/Libraries/Win/XPLM_64.lib"
         "${SDK_DIR}/Libraries/Win/XPWidgets_64.lib"
-        winhttp
         ws2_32
     )
 
     # Per-config output dirs prevent MSBuild from appending "RelWithDebInfo/" etc.
-    set(_DIST "${CMAKE_BINARY_DIR}/dist/XPanelServer/win_x64")
     set_target_properties(XPanelServer PROPERTIES
         OUTPUT_NAME                             "XPanelServer"
         SUFFIX                                  ".xpl"
@@ -88,6 +106,76 @@ if(WIN32)
         RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${_DIST}"
         RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL     "${_DIST}"
         MSVC_RUNTIME_LIBRARY                    "MultiThreadedDLL"
+    )
+endif()
+
+# ── macOS x64 / arm64 ─────────────────────────────────────────────────────────
+if(APPLE)
+    target_compile_definitions(XPanelServer PRIVATE
+        XPLM200=1 XPLM210=1 XPLM300=1 XPLM301=1 XPLM303=1 XPLM400=1
+        APL=1
+    )
+
+    # X-Plane SDK frameworks
+    target_include_directories(XPanelServer PRIVATE
+        "${SDK_DIR}/Libraries/Mac"
+    )
+
+    # civetweb needs pthreads on macOS
+    find_package(Threads REQUIRED)
+
+    # -undefined dynamic_lookup lets XPLM/XPWidgets symbols resolve at load time.
+    # Use target_link_libraries for framework flags so CMake handles quoting correctly.
+    target_link_libraries(XPanelServer PRIVATE
+        Threads::Threads
+        "-F${SDK_DIR}/Libraries/Mac"
+        "-framework XPLM"
+        "-framework XPWidgets"
+        "-framework OpenGL"
+        "-undefined dynamic_lookup"
+    )
+
+    # Build a universal binary if both toolchains are available
+    # (override with -DCMAKE_OSX_ARCHITECTURES="x86_64" or "arm64" for single-arch)
+    if(NOT CMAKE_OSX_ARCHITECTURES)
+        set(CMAKE_OSX_ARCHITECTURES "x86_64" CACHE STRING "" FORCE)
+    endif()
+
+    set_target_properties(XPanelServer PROPERTIES
+        OUTPUT_NAME    "XPanelServer"
+        SUFFIX         ".xpl"
+        PREFIX         ""
+        LIBRARY_OUTPUT_DIRECTORY "${_DIST}"
+    )
+endif()
+
+# ── Linux x64 ─────────────────────────────────────────────────────────────────
+if(UNIX AND NOT APPLE)
+    target_compile_definitions(XPanelServer PRIVATE
+        XPLM200=1 XPLM210=1 XPLM300=1 XPLM301=1 XPLM303=1 XPLM400=1
+        LIN=1
+        _GNU_SOURCE
+    )
+
+    target_compile_options(XPanelServer PRIVATE
+        -fPIC
+        -fvisibility=hidden   # only export XPlugin* symbols; everything else is hidden
+        -Wall
+        -Wno-deprecated-declarations
+    )
+
+    # civetweb needs pthreads; XPLM symbols are injected by X-Plane at load time
+    find_package(Threads REQUIRED)
+    target_link_libraries(XPanelServer PRIVATE Threads::Threads)
+
+    # XPLM symbols are resolved at load time by X-Plane (no import lib needed).
+    # --allow-shlib-undefined suppresses link-time errors for those symbols.
+
+    set_target_properties(XPanelServer PROPERTIES
+        OUTPUT_NAME    "XPanelServer"
+        SUFFIX         ".xpl"
+        PREFIX         ""
+        LIBRARY_OUTPUT_DIRECTORY "${_DIST}"
     )
 endif()
 
@@ -107,7 +195,8 @@ add_custom_command(TARGET XPanelServer POST_BUILD
 
 message(STATUS "")
 message(STATUS "=======================================================")
-message(STATUS " Output: ${CMAKE_BINARY_DIR}/dist/XPanelServer/")
+message(STATUS " Platform : ${XP_PLATFORM}")
+message(STATUS " Output   : ${CMAKE_BINARY_DIR}/dist/XPanelServer/")
 message(STATUS " Install to: <X-Plane 12>/Resources/plugins/")
 message(STATUS "=======================================================")
 message(STATUS "")

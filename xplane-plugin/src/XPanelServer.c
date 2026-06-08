@@ -1,36 +1,62 @@
 /*
  * XPanelServer.c  —  X-Plane 12 plugin
  *
- * Serves the XPlaneNetworkPanels web app on the local network so that
- * a separate Python process is no longer required.
+ * Serves the XPlaneNetworkPanels web app on the local network.
  *
  * Port (default 8088, configurable via Plugin menu):
  *   /                  → static files from  <plugin>/Resources/web/
  *   /api/*             → HTTP proxy  →  http://127.0.0.1:8086/api/*
- *   /ws                → WebSocket proxy  →  ws://127.0.0.1:8086/api/v3
+ *   /ws                → WebSocket hub  →  ws://127.0.0.1:8086/api/v3
  *   /panels[/*]        → panel config CRUD  →  <plugin>/Resources/panels.json
- *   /acf               → ACF file probe  →  parses loaded aircraft .acf for extra data
+ *   /acf               → ACF file probe
  *
- * Build requirements (Windows x64):
- *   Visual Studio 2019+ or MinGW-w64 GCC 12+
- *   CMake 3.15+
- *   X-Plane SDK 4.x  (place in ../sdk/)
- *   civetweb source  (fetched automatically by CMake)
- *   cJSON source     (fetched automatically by CMake)
+ * The HTTP proxy and WebSocket hub use civetweb's own client API and work
+ * on Windows, macOS, and Linux without any platform-specific code.
  */
 
-#define _WIN32_WINNT 0x0602   /* Windows 8+ — needed for WinHTTP WebSocket */
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <winhttp.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
+/* ── Platform compatibility ───────────────────────────────────────────────── */
+#ifdef _WIN32
+    #define WIN32_LEAN_AND_MEAN
+    #define _WIN32_WINNT 0x0602
+    #include <windows.h>
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+
+    typedef CRITICAL_SECTION  xp_mutex_t;
+    #define xp_mutex_init(m)  InitializeCriticalSection(m)
+    #define xp_mutex_lock(m)  EnterCriticalSection(m)
+    #define xp_mutex_unlock(m) LeaveCriticalSection(m)
+    #define xp_mutex_free(m)  DeleteCriticalSection(m)
+    #define xp_sleep_ms(ms)   Sleep(ms)
+    #define xp_strdup         _strdup
+    #define xp_mkdir(p)       CreateDirectoryA((p), NULL)
+#else
+    #include <pthread.h>
+    #include <unistd.h>
+    #include <sys/stat.h>
+    #include <ifaddrs.h>
+    #include <arpa/inet.h>
+    #include <net/if.h>
+
+    typedef pthread_mutex_t   xp_mutex_t;
+    #define xp_mutex_init(m)  pthread_mutex_init((m), NULL)
+    #define xp_mutex_lock(m)  pthread_mutex_lock(m)
+    #define xp_mutex_unlock(m) pthread_mutex_unlock(m)
+    #define xp_mutex_free(m)  pthread_mutex_destroy(m)
+    #define xp_sleep_ms(ms)   usleep((unsigned)(ms) * 1000u)
+    #define xp_strdup         strdup
+    #define xp_mkdir(p)       mkdir((p), 0755)
+
+    #ifndef MAX_PATH
+    #define MAX_PATH 4096
+    #endif
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
 
-/* XPLM SDK */
 #include "XPLMPlugin.h"
 #include "XPLMMenus.h"
 #include "XPLMUtilities.h"
@@ -38,79 +64,70 @@
 #include "XPWidgets.h"
 #include "XPStandardWidgets.h"
 
-/* Vendored libs */
 #include "civetweb.h"
 #include "cJSON.h"
 
-/* ── Compile-time options ──────────────────────────────────────────────────── */
+/* ── Compile-time options ─────────────────────────────────────────────────── */
 #define XPANEL_DEFAULT_PORT  8088
 #define XPLANE_API_PORT      8086
 #define XPLANE_HOST          "127.0.0.1"
-#define XPLANE_HOST_W        L"127.0.0.1"
-#define RESP_BUFFER_INIT     (256  * 1024)   /* initial HTTP response buffer */
-#define RESP_BUFFER_MAX      (8    * 1024 * 1024) /* max response (8 MB for datarefs) */
-#define WS_RECV_BUFFER       (128  * 1024)
+#define RESP_BUFFER_INIT     (256  * 1024)
+#define RESP_BUFFER_MAX      (8    * 1024 * 1024)
+#define MAX_BROWSERS         8
 
-/* ── Global state ──────────────────────────────────────────────────────────── */
-static int                g_port      = XPANEL_DEFAULT_PORT;
-static volatile int       g_running   = 0;
-static struct mg_context *g_ctx       = NULL;
-static CRITICAL_SECTION   g_cs;                     /* guards panels.json I/O */
+/* ── Global state ─────────────────────────────────────────────────────────── */
+static int                g_port    = XPANEL_DEFAULT_PORT;
+static volatile int       g_running = 0;
+static struct mg_context *g_ctx     = NULL;
+static xp_mutex_t         g_cs;
 
-static char  g_plugin_root[MAX_PATH];   /* .../Resources/plugins/XPanelServer   */
-static char  g_resources[MAX_PATH];     /* g_plugin_root/Resources              */
-static char  g_web_root[MAX_PATH];      /* g_resources/web  (static files)      */
-static char  g_panels_path[MAX_PATH];   /* g_resources/panels.json              */
-static char  g_config_path[MAX_PATH];   /* g_resources/config.json              */
+static char g_plugin_root[MAX_PATH];
+static char g_resources[MAX_PATH];
+static char g_web_root[MAX_PATH];
+static char g_panels_path[MAX_PATH];
+static char g_config_path[MAX_PATH];
 
 #define MAX_IPS 12
-static char g_ips[MAX_IPS][64];   /* sorted IPs: private first, then other */
+static char g_ips[MAX_IPS][64];
 static int  g_ip_count = 0;
 
 static XPLMMenuID g_menu;
 static int        g_mi_toggle;
 static int        g_mi_port;
+static XPWidgetID g_dlg       = NULL;
+static XPWidgetID g_dlg_field = NULL;
+static XPWidgetID g_dlg_btn   = NULL;
 
-static XPWidgetID g_dlg        = NULL;
-static XPWidgetID g_dlg_field  = NULL;
-static XPWidgetID g_dlg_btn    = NULL;
-
-/* ── WebSocket hub ─────────────────────────────────────────────────────────── */
+/* ── WebSocket hub ────────────────────────────────────────────────────────── */
 /*
- * One persistent WebSocket connection to X-Plane, shared by all browser
- * clients.  Each browser that connects is added to conns[]; messages from
- * X-Plane are broadcast to every entry.  This avoids hitting X-Plane's
- * concurrent-connection limit when multiple devices are open at once.
+ * One upstream civetweb WebSocket client to X-Plane, shared by all browsers.
+ * g_xp_conn is created by mg_connect_websocket_client() and lives on
+ * civetweb's internal thread.  All access is protected by hub.send_cs.
  */
-#define MAX_BROWSERS 8
+static struct mg_connection *g_xp_conn = NULL;
 
 typedef struct {
     struct mg_connection *conns[MAX_BROWSERS];
-    char                 *sub_msgs[MAX_BROWSERS]; /* last subscription per browser  */
+    char                 *sub_msgs[MAX_BROWSERS];
     int                   count;
-    CRITICAL_SECTION      cs;          /* guards conns[], sub_msgs[], count   */
-    CRITICAL_SECTION      send_cs;     /* serialises WinHTTP sends to X-Plane */
-    HINTERNET             hS, hC, hR, hWs;
-    HANDLE                thread;
-    volatile LONG         running;
+    xp_mutex_t            cs;       /* guards conns[], sub_msgs[], count */
+    xp_mutex_t            send_cs;  /* serialises writes to g_xp_conn    */
+#ifdef _WIN32
+    HANDLE         thread;
+    volatile LONG  running;
+#else
+    pthread_t      thread;
+    volatile int   running;
+#endif
 } WsHub;
 
 static WsHub g_hub;
 
-/* ── Dataref value cache ───────────────────────────────────────────────────── */
-/*
- * Stores the latest known value for every dataref received from X-Plane.
- * When a new browser connects it gets an immediate snapshot so it doesn't
- * have to wait for slow-changing datarefs to update before displaying data.
- *
- * Format assumed for X-Plane v3 update messages:
- *   { "type": "dataref_update_values",
- *     "data": [ {"id": 123, "value": 42.5}, ... ] }
- */
-static cJSON            *g_dref_cache = NULL;   /* object keyed by id-as-string */
-static CRITICAL_SECTION  g_cache_cs;
+/* ── Dataref value cache ──────────────────────────────────────────────────── */
+static cJSON      *g_dref_cache = NULL;
+static xp_mutex_t  g_cache_cs;
 
-/* ── Utility ───────────────────────────────────────────────────────────────── */
+/* ── Utility ──────────────────────────────────────────────────────────────── */
 static void log_msg(const char *fmt, ...) {
     char buf[512];
     va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
@@ -119,13 +136,7 @@ static void log_msg(const char *fmt, ...) {
     XPLMDebugString("\n");
 }
 
-/* ASCII → wide char (UTF-8 paths/URLs) */
-static wchar_t *to_wide(const char *s, wchar_t *buf, int n) {
-    MultiByteToWideChar(CP_UTF8, 0, s, -1, buf, n);
-    return buf;
-}
-
-/* ── Config ────────────────────────────────────────────────────────────────── */
+/* ── Config ───────────────────────────────────────────────────────────────── */
 static void config_load(void) {
     FILE *f = fopen(g_config_path, "r");
     if (!f) return;
@@ -144,12 +155,12 @@ static void config_save(void) {
     fclose(f);
 }
 
-/* ── Panels CRUD ───────────────────────────────────────────────────────────── */
-static char *panels_read(void) {          /* caller must free() */
+/* ── Panels CRUD ──────────────────────────────────────────────────────────── */
+static char *panels_read(void) {
     FILE *f = fopen(g_panels_path, "r");
-    if (!f) return _strdup("[]");
+    if (!f) return xp_strdup("[]");
     fseek(f, 0, SEEK_END); long sz = ftell(f); rewind(f);
-    if (sz <= 0) { fclose(f); return _strdup("[]"); }
+    if (sz <= 0) { fclose(f); return xp_strdup("[]"); }
     char *b = malloc(sz + 1); fread(b, 1, sz, f); b[sz] = '\0'; fclose(f);
     return b;
 }
@@ -160,7 +171,6 @@ static void panels_write(const char *json) {
     fputs(json, f); fclose(f);
 }
 
-/* Extract panel_id from URI "/panels/<id>" (returns pointer into uri, or NULL) */
 static const char *panel_id_from_uri(const char *uri) {
     if (strncmp(uri, "/panels/", 8) == 0 && uri[8] != '\0') return uri + 8;
     return NULL;
@@ -168,14 +178,13 @@ static const char *panel_id_from_uri(const char *uri) {
 
 static int handle_panels(struct mg_connection *conn, void *cbdata) {
     const struct mg_request_info *ri = mg_get_request_info(conn);
-    const char *method    = ri->request_method;
-    const char *panel_id  = panel_id_from_uri(ri->local_uri);
+    const char *method   = ri->request_method;
+    const char *panel_id = panel_id_from_uri(ri->local_uri);
 
-    EnterCriticalSection(&g_cs);
+    xp_mutex_lock(&g_cs);
 
     if (strcmp(method, "GET") == 0) {
         char *file_json = panels_read();
-
         if (panel_id) {
             cJSON *arr = cJSON_Parse(file_json); free(file_json);
             cJSON *found = NULL;
@@ -183,10 +192,9 @@ static int handle_panels(struct mg_connection *conn, void *cbdata) {
                 cJSON *id = cJSON_GetObjectItem(it, "id");
                 if (id && strcmp(cJSON_GetStringValue(id), panel_id) == 0) { found = it; break; }
             }}
-            char *out = found ? cJSON_PrintUnformatted(found) : _strdup("null");
-            int  code = found ? 200 : 404;
+            char *out = found ? cJSON_PrintUnformatted(found) : xp_strdup("null");
             mg_printf(conn, "HTTP/1.1 %d OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
-                      code, (int)strlen(out), out);
+                      found ? 200 : 404, (int)strlen(out), out);
             free(out); cJSON_Delete(arr);
         } else {
             mg_printf(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
@@ -195,18 +203,15 @@ static int handle_panels(struct mg_connection *conn, void *cbdata) {
         }
 
     } else if (strcmp(method, "PUT") == 0 || strcmp(method, "POST") == 0) {
-        char body[1 << 17] = {0};
-        int  blen = 0;
+        char body[1 << 17] = {0}; int blen = 0;
         if (ri->content_length > 0 && ri->content_length < (int64_t)sizeof(body))
             blen = mg_read(conn, body, (int)ri->content_length);
-
         char *file_json = panels_read();
         cJSON *arr = cJSON_Parse(file_json); if (!arr) arr = cJSON_CreateArray(); free(file_json);
         cJSON *panel = cJSON_Parse(body);
         if (panel) {
             cJSON *new_id = cJSON_GetObjectItem(panel, "id");
-            int cnt = cJSON_GetArraySize(arr);
-            for (int i = cnt - 1; i >= 0; i--) {
+            for (int i = cJSON_GetArraySize(arr) - 1; i >= 0; i--) {
                 cJSON *id = cJSON_GetObjectItem(cJSON_GetArrayItem(arr, i), "id");
                 if (new_id && id && strcmp(cJSON_GetStringValue(id), cJSON_GetStringValue(new_id)) == 0)
                     cJSON_DeleteItemFromArray(arr, i);
@@ -214,7 +219,7 @@ static int handle_panels(struct mg_connection *conn, void *cbdata) {
             cJSON_AddItemToArray(arr, panel);
         }
         char *out = cJSON_PrintUnformatted(arr); panels_write(out);
-        char *resp = panel ? cJSON_PrintUnformatted(panel) : _strdup("{}");
+        char *resp = panel ? cJSON_PrintUnformatted(panel) : xp_strdup("{}");
         mg_printf(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
                   (int)strlen(resp), resp);
         free(out); free(resp); cJSON_Delete(arr);
@@ -223,167 +228,138 @@ static int handle_panels(struct mg_connection *conn, void *cbdata) {
         char *file_json = panels_read();
         cJSON *arr = cJSON_Parse(file_json); free(file_json);
         if (arr) {
-            int cnt = cJSON_GetArraySize(arr);
-            for (int i = cnt - 1; i >= 0; i--) {
+            for (int i = cJSON_GetArraySize(arr) - 1; i >= 0; i--) {
                 cJSON *id = cJSON_GetObjectItem(cJSON_GetArrayItem(arr, i), "id");
-                if (id && strcmp(cJSON_GetStringValue(id), panel_id) == 0) cJSON_DeleteItemFromArray(arr, i);
+                if (id && strcmp(cJSON_GetStringValue(id), panel_id) == 0)
+                    cJSON_DeleteItemFromArray(arr, i);
             }
             char *out = cJSON_PrintUnformatted(arr); panels_write(out); free(out); cJSON_Delete(arr);
         }
         mg_printf(conn, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
     }
 
-    LeaveCriticalSection(&g_cs);
+    xp_mutex_unlock(&g_cs);
     return 1;
 }
 
-/* ── REST API proxy ─────────────────────────────────────────────────────────── */
+/* ── REST API proxy via civetweb HTTP client ─────────────────────────────── */
 /*
  * Forwards /api/v3/... → http://127.0.0.1:8086/v3/...
- * Uses WinHTTP (synchronous) so we can stream the response back simply.
+ * Uses mg_connect_client (plain TCP, no SSL) + mg_get_response, which works
+ * on all three platforms without any OS-specific HTTP library.
  */
 static int handle_api(struct mg_connection *conn, void *cbdata) {
     const struct mg_request_info *ri = mg_get_request_info(conn);
 
-    /* Forward full URI — X-Plane serves its REST API at /api/v3/... on port 8086 */
-    const char *uri = ri->local_uri;
-    const char *xp  = uri;
-    char full[2048];
+    char req_path[2048];
     if (ri->query_string && ri->query_string[0])
-        snprintf(full, sizeof(full), "%s?%s", xp, ri->query_string);
+        snprintf(req_path, sizeof(req_path), "%s?%s", ri->local_uri, ri->query_string);
     else
-        strncpy(full, xp, sizeof(full) - 1);
+        strncpy(req_path, ri->local_uri, sizeof(req_path) - 1);
 
-    /* Read request body */
-    char   body[1 << 17] = {0};
-    int    body_len = 0;
+    char body[1 << 17] = {0}; int body_len = 0;
     if (ri->content_length > 0 && ri->content_length < (int64_t)sizeof(body))
         body_len = mg_read(conn, body, (int)ri->content_length);
 
-    /* Open WinHTTP session */
-    HINTERNET hS = WinHttpOpen(L"XPanelServer/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
-                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hS) goto fail;
-    HINTERNET hC = WinHttpConnect(hS, XPLANE_HOST_W, XPLANE_API_PORT, 0);
-    if (!hC) { WinHttpCloseHandle(hS); goto fail; }
+    char errbuf[256] = {0};
+    struct mg_connection *xp = mg_connect_client(XPLANE_HOST, XPLANE_API_PORT,
+                                                  0, errbuf, sizeof(errbuf));
+    if (!xp) goto fail;
 
-    wchar_t wpath[2048], wmethod[16];
-    HINTERNET hR = WinHttpOpenRequest(hC,
-        to_wide(ri->request_method, wmethod, 16),
-        to_wide(full, wpath, 2048),
-        NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
-    if (!hR) { WinHttpCloseHandle(hC); WinHttpCloseHandle(hS); goto fail; }
-
-    LPCWSTR hdrs  = body_len > 0 ? L"Content-Type: application/json\r\n" : WINHTTP_NO_ADDITIONAL_HEADERS;
-    DWORD   hdrs_len = body_len > 0 ? (DWORD)-1L : 0;
-    BOOL ok = WinHttpSendRequest(hR, hdrs, hdrs_len,
-                                 body_len > 0 ? body : NULL, body_len, body_len, 0);
-    if (!ok || !WinHttpReceiveResponse(hR, NULL)) {
-        WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS); goto fail;
+    if (body_len > 0) {
+        mg_printf(xp, "%s %s HTTP/1.0\r\nHost: %s:%d\r\n"
+                  "Content-Type: application/json\r\nContent-Length: %d\r\n\r\n",
+                  ri->request_method, req_path, XPLANE_HOST, XPLANE_API_PORT, body_len);
+        mg_write(xp, body, body_len);
+    } else {
+        mg_printf(xp, "%s %s HTTP/1.0\r\nHost: %s:%d\r\n\r\n",
+                  ri->request_method, req_path, XPLANE_HOST, XPLANE_API_PORT);
     }
 
-    /* Status code */
-    DWORD status = 200, sz = sizeof(status);
-    WinHttpQueryHeaders(hR, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                        NULL, &status, &sz, NULL);
+    if (mg_get_response(xp, errbuf, sizeof(errbuf), 5000) < 0) {
+        mg_close_connection(xp); goto fail;
+    }
 
-    /* Content-Type from X-Plane */
-    wchar_t ct[128] = L"application/json";
-    DWORD   ct_sz = sizeof(ct);
-    WinHttpQueryHeaders(hR, WINHTTP_QUERY_CONTENT_TYPE, NULL, ct, &ct_sz, NULL);
-    char ct_a[128]; WideCharToMultiByte(CP_UTF8, 0, ct, -1, ct_a, 128, NULL, NULL);
+    const struct mg_response_info *rinfo = mg_get_response_info(xp);
+    if (!rinfo) { mg_close_connection(xp); goto fail; }
 
-    /* Read response into dynamic buffer */
-    size_t resp_cap = RESP_BUFFER_INIT, resp_len = 0;
-    char  *resp = malloc(resp_cap);
-    DWORD  avail = 0, nread = 0;
-    while (WinHttpQueryDataAvailable(hR, &avail) && avail > 0) {
-        if (resp_len + avail + 1 > resp_cap) {
-            resp_cap = (resp_len + avail + 1) * 2;
-            if (resp_cap > RESP_BUFFER_MAX) break;
-            resp = realloc(resp, resp_cap);
+    int status = rinfo->status_code;
+    const char *ct = "application/json";
+    for (int i = 0; i < rinfo->num_headers; i++) {
+        if (mg_strcasecmp(rinfo->http_headers[i].name, "Content-Type") == 0) {
+            ct = rinfo->http_headers[i].value; break;
         }
-        WinHttpReadData(hR, resp + resp_len, avail, &nread);
-        resp_len += nread;
     }
 
-    WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
+    size_t cap = RESP_BUFFER_INIT, len = 0;
+    char *resp = malloc(cap); int n;
+    while ((n = mg_read(xp, resp + len, (int)(cap - len - 1))) > 0) {
+        len += n;
+        if (len + 1 >= cap) {
+            size_t newcap = cap * 2;
+            if (newcap > RESP_BUFFER_MAX) break;
+            resp = realloc(resp, newcap); cap = newcap;
+        }
+    }
+    mg_close_connection(xp);
 
-    const char *stext = (status==200)?"OK":(status==204)?"No Content":(status==404)?"Not Found":"Error";
-    mg_printf(conn, "HTTP/1.1 %lu %s\r\nContent-Type: %s\r\nContent-Length: %lu\r\n\r\n",
-              (unsigned long)status, stext, ct_a, (unsigned long)resp_len);
-    if (resp_len > 0) mg_write(conn, resp, resp_len);
+    const char *st = status==200?"OK":status==204?"No Content":status==404?"Not Found":"Error";
+    mg_printf(conn, "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\n\r\n",
+              status, st, ct, len);
+    if (len > 0) mg_write(conn, resp, len);
     free(resp);
     return 1;
 
 fail:
-    log_msg("REST proxy failed for %s %s", ri->request_method, ri->local_uri);
-    mg_printf(conn, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 22\r\n\r\nX-Plane unreachable\r\n");
+    log_msg("REST proxy failed for %s %s: %s", ri->request_method, ri->local_uri, errbuf);
+    mg_printf(conn, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 19\r\n\r\nX-Plane unreachable");
     return 1;
 }
 
-/* ── Dataref value cache ───────────────────────────────────────────────────── */
-
+/* ── Dataref value cache ──────────────────────────────────────────────────── */
 static void cache_init(void) {
-    InitializeCriticalSection(&g_cache_cs);
+    xp_mutex_init(&g_cache_cs);
     g_dref_cache = cJSON_CreateObject();
 }
 
 static void cache_free(void) {
     if (g_dref_cache) { cJSON_Delete(g_dref_cache); g_dref_cache = NULL; }
-    DeleteCriticalSection(&g_cache_cs);
+    xp_mutex_free(&g_cache_cs);
 }
 
-/* Called for every text message received from X-Plane.
- * Parses dataref_update_values and stores the latest value per dataref.
- * X-Plane v3 format: {"type":"dataref_update_values","data":{"123":42.5,...}} */
-static void cache_update(const BYTE *data, DWORD len) {
+static void cache_update(const char *data, size_t len) {
     if (!g_dref_cache || len == 0) return;
-    /* Safe to null-terminate: buf is WS_RECV_BUFFER and len < WS_RECV_BUFFER */
-    ((char *)data)[len] = '\0';
-    cJSON *msg = cJSON_Parse((const char *)data);
+    cJSON *msg = cJSON_ParseWithLength(data, len);
     if (!msg) return;
-
     cJSON *type = cJSON_GetObjectItemCaseSensitive(msg, "type");
-    if (!cJSON_IsString(type) ||
-        strcmp(type->valuestring, "dataref_update_values") != 0) {
-        cJSON_Delete(msg); return;
-    }
-    /* X-Plane sends "data" as a JSON object keyed by string dataref ID */
+    if (!cJSON_IsString(type) || strcmp(type->valuestring, "dataref_update_values") != 0)
+        { cJSON_Delete(msg); return; }
     cJSON *obj = cJSON_GetObjectItemCaseSensitive(msg, "data");
     if (!cJSON_IsObject(obj)) { cJSON_Delete(msg); return; }
 
-    EnterCriticalSection(&g_cache_cs);
+    xp_mutex_lock(&g_cache_cs);
     cJSON *item;
-    cJSON_ArrayForEach(item, obj) {   /* cJSON_ArrayForEach iterates object children too */
+    cJSON_ArrayForEach(item, obj) {
         if (!item->string) continue;
         cJSON_DeleteItemFromObject(g_dref_cache, item->string);
         cJSON_AddItemToObject(g_dref_cache, item->string, cJSON_Duplicate(item, 1));
     }
-    LeaveCriticalSection(&g_cache_cs);
+    xp_mutex_unlock(&g_cache_cs);
     cJSON_Delete(msg);
 }
 
-/* Send all cached values to a newly-connected browser so it gets the full
- * current state immediately rather than waiting for each value to change.
- * Output matches X-Plane v3 format: {"type":"dataref_update_values","data":{"123":42.5,...}} */
 static void cache_flush(struct mg_connection *conn) {
-    EnterCriticalSection(&g_cache_cs);
-    int n = cJSON_GetArraySize(g_dref_cache);  /* works for objects */
-    if (!g_dref_cache || n == 0) {
-        LeaveCriticalSection(&g_cache_cs); return;
-    }
-
-    cJSON *msg     = cJSON_CreateObject();
-    cJSON *out_obj = cJSON_CreateObject();
+    xp_mutex_lock(&g_cache_cs);
+    int n = cJSON_GetArraySize(g_dref_cache);
+    if (!g_dref_cache || n == 0) { xp_mutex_unlock(&g_cache_cs); return; }
+    cJSON *msg = cJSON_CreateObject();
+    cJSON *out = cJSON_CreateObject();
     cJSON_AddStringToObject(msg, "type", "dataref_update_values");
-
     cJSON *val;
-    cJSON_ArrayForEach(val, g_dref_cache) {
-        cJSON_AddItemToObject(out_obj, val->string, cJSON_Duplicate(val, 1));
-    }
-    cJSON_AddItemToObject(msg, "data", out_obj);
-    LeaveCriticalSection(&g_cache_cs);  /* release before potentially slow write */
+    cJSON_ArrayForEach(val, g_dref_cache)
+        cJSON_AddItemToObject(out, val->string, cJSON_Duplicate(val, 1));
+    cJSON_AddItemToObject(msg, "data", out);
+    xp_mutex_unlock(&g_cache_cs);
 
     char *json = cJSON_PrintUnformatted(msg);
     cJSON_Delete(msg);
@@ -394,231 +370,175 @@ static void cache_flush(struct mg_connection *conn) {
     }
 }
 
-/* ── WebSocket hub ─────────────────────────────────────────────────────────── */
+/* ── WebSocket hub — upstream X-Plane callbacks ───────────────────────────── */
+/*
+ * These are called from civetweb's internal client thread.
+ * hub_ws_data_from_xplane  — X-Plane sent data → broadcast to all browsers
+ * hub_ws_close_from_xplane — upstream connection dropped → mark for reconnect
+ */
+static int hub_ws_data_from_xplane(struct mg_connection *conn, int bits,
+                                    char *data, size_t data_len, void *user_data) {
+    int op = bits & 0x0f;
+    if (op == MG_WEBSOCKET_OPCODE_CONNECTION_CLOSE) return 0;
+    if (data_len == 0) return 1;
 
-/* Open a fresh WinHTTP WebSocket to X-Plane.
- * Returns 1 on success, 0 on failure (X-Plane not yet running, etc.). */
+    if (op == MG_WEBSOCKET_OPCODE_TEXT)
+        cache_update(data, data_len);
+
+    struct mg_connection *snap[MAX_BROWSERS]; int snap_n;
+    xp_mutex_lock(&g_hub.cs);
+    snap_n = g_hub.count;
+    memcpy(snap, g_hub.conns, snap_n * sizeof(snap[0]));
+    xp_mutex_unlock(&g_hub.cs);
+
+    for (int i = 0; i < snap_n; i++) {
+        if (mg_websocket_write(snap[i], op, data, data_len) <= 0) {
+            log_msg("hub: write to browser %d failed, removing", i);
+            xp_mutex_lock(&g_hub.cs);
+            for (int j = 0; j < g_hub.count; j++) {
+                if (g_hub.conns[j] == snap[i]) {
+                    int last = --g_hub.count;
+                    free(g_hub.sub_msgs[j]);
+                    g_hub.sub_msgs[j] = g_hub.sub_msgs[last];
+                    g_hub.conns[j]    = g_hub.conns[last];
+                    g_hub.sub_msgs[last] = NULL;
+                    break;
+                }
+            }
+            xp_mutex_unlock(&g_hub.cs);
+        }
+    }
+    return 1;
+}
+
+static void hub_ws_close_from_xplane(const struct mg_connection *conn, void *user_data) {
+    log_msg("hub: X-Plane WS closed — will reconnect");
+    xp_mutex_lock(&g_hub.send_cs);
+    if (g_xp_conn == conn) g_xp_conn = NULL;
+    xp_mutex_unlock(&g_hub.send_cs);
+}
+
 static int hub_connect_xplane(void) {
-    g_hub.hS = WinHttpOpen(L"XPanelServer/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
-                           WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!g_hub.hS) return 0;
-
-    g_hub.hC = WinHttpConnect(g_hub.hS, XPLANE_HOST_W, XPLANE_API_PORT, 0);
-    if (!g_hub.hC) { WinHttpCloseHandle(g_hub.hS); g_hub.hS = NULL; return 0; }
-
-    g_hub.hR = WinHttpOpenRequest(g_hub.hC, L"GET", L"/api/v3",
-                                  NULL, WINHTTP_NO_REFERER, NULL, 0);
-    if (!g_hub.hR) goto fail;
-
-    WinHttpSetOption(g_hub.hR, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0);
-
-    if (!WinHttpSendRequest(g_hub.hR,
-            L"Pragma: no-cache\r\nCache-Control: no-cache\r\n",
-            (DWORD)-1, NULL, 0, 0, 0)) goto fail;
-    if (!WinHttpReceiveResponse(g_hub.hR, NULL)) goto fail;
-
-    g_hub.hWs = WinHttpWebSocketCompleteUpgrade(g_hub.hR, 0);
-    if (!g_hub.hWs) goto fail;
-
+    char errbuf[256] = {0};
+    struct mg_connection *c = mg_connect_websocket_client(
+        XPLANE_HOST, XPLANE_API_PORT, 0,
+        errbuf, sizeof(errbuf),
+        "/api/v3", NULL,
+        hub_ws_data_from_xplane,
+        hub_ws_close_from_xplane,
+        NULL);
+    if (!c) { log_msg("hub: connect failed: %s", errbuf); return 0; }
+    xp_mutex_lock(&g_hub.send_cs);
+    g_xp_conn = c;
+    xp_mutex_unlock(&g_hub.send_cs);
     log_msg("hub: connected to X-Plane WebSocket");
     return 1;
-
-fail:
-    log_msg("hub: failed to connect to X-Plane (not running yet?)");
-    if (g_hub.hR) { WinHttpCloseHandle(g_hub.hR); g_hub.hR = NULL; }
-    WinHttpCloseHandle(g_hub.hC); g_hub.hC = NULL;
-    WinHttpCloseHandle(g_hub.hS); g_hub.hS = NULL;
-    return 0;
 }
 
-static void hub_close_xplane(void) {
-    if (g_hub.hWs) {
-        WinHttpWebSocketClose(g_hub.hWs,
-            WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS, NULL, 0);
-        WinHttpCloseHandle(g_hub.hWs); g_hub.hWs = NULL;
-    }
-    if (g_hub.hR) { WinHttpCloseHandle(g_hub.hR); g_hub.hR = NULL; }
-    if (g_hub.hC) { WinHttpCloseHandle(g_hub.hC); g_hub.hC = NULL; }
-    if (g_hub.hS) { WinHttpCloseHandle(g_hub.hS); g_hub.hS = NULL; }
-}
-
-/* Background thread: receive from X-Plane and broadcast to all browsers. */
-static DWORD WINAPI hub_recv_thread(LPVOID arg) {
-    BYTE buf[WS_RECV_BUFFER];
-
+/* ── WebSocket hub — reconnect loop (common logic) ────────────────────────── */
+static void hub_reconnect_loop(void) {
     while (g_hub.running) {
+        xp_mutex_lock(&g_hub.send_cs);
+        int connected = (g_xp_conn != NULL);
+        xp_mutex_unlock(&g_hub.send_cs);
 
-        /* If we lost the X-Plane connection, keep retrying every 2 s */
-        if (!g_hub.hWs) {
-            Sleep(2000);
-            if (!g_hub.running) break;
-            if (!hub_connect_xplane()) continue;
-            /* Replay every browser's stored subscription so X-Plane knows
-             * what datarefs to stream — snapshot strings under lock first
-             * to avoid racing with ws_close freeing them.                */
-            char *subs[MAX_BROWSERS] = {0};
-            EnterCriticalSection(&g_hub.cs);
-            for (int i = 0; i < g_hub.count; i++)
-                if (g_hub.sub_msgs[i]) subs[i] = _strdup(g_hub.sub_msgs[i]);
-            LeaveCriticalSection(&g_hub.cs);
-            for (int i = 0; i < MAX_BROWSERS; i++) {
-                if (!subs[i]) continue;
-                log_msg("hub: replaying subscription for browser slot %d", i);
-                EnterCriticalSection(&g_hub.send_cs);
-                WinHttpWebSocketSend(g_hub.hWs,
-                    WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE,
-                    subs[i], (DWORD)strlen(subs[i]));
-                LeaveCriticalSection(&g_hub.send_cs);
-                free(subs[i]);
-            }
-        }
+        if (connected) { xp_sleep_ms(500); continue; }
 
-        DWORD bytes = 0;
-        WINHTTP_WEB_SOCKET_BUFFER_TYPE btype;
-        DWORD rc = WinHttpWebSocketReceive(g_hub.hWs,
-                       buf, sizeof(buf), &bytes, &btype);
+        if (!hub_connect_xplane()) { xp_sleep_ms(2000); continue; }
 
-        if (rc != ERROR_SUCCESS) {
-            log_msg("hub: X-Plane WS receive error %lu — reconnecting", rc);
-            hub_close_xplane();
-            /* Leave browsers connected — instruments freeze on their last value.
-             * Subscriptions are replayed automatically once X-Plane comes back. */
-            continue;
-        }
+        /* Replay every browser's last subscription so X-Plane streams
+         * the right datarefs after a reconnect. */
+        char *subs[MAX_BROWSERS] = {0};
+        xp_mutex_lock(&g_hub.cs);
+        for (int i = 0; i < g_hub.count; i++)
+            if (g_hub.sub_msgs[i]) subs[i] = xp_strdup(g_hub.sub_msgs[i]);
+        xp_mutex_unlock(&g_hub.cs);
 
-        /* X-Plane closed cleanly — treat same as error, will reconnect */
-        if (btype == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
-            log_msg("hub: X-Plane closed WS cleanly — reconnecting");
-            hub_close_xplane();
-            continue;
-        }
-
-        /* Control frames (ping/pong) carry 0 bytes — nothing to forward */
-        if (bytes == 0) continue;
-
-        /* Broadcast to all connected browsers.
-         * Snapshot the list under the lock, then write outside it so a
-         * slow remote connection can't stall ws_ready / ws_close.        */
-        int opcode = (btype == WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE ||
-                      btype == WINHTTP_WEB_SOCKET_BINARY_FRAGMENT_BUFFER_TYPE)
-                     ? MG_WEBSOCKET_OPCODE_BINARY : MG_WEBSOCKET_OPCODE_TEXT;
-
-        struct mg_connection *snap[MAX_BROWSERS];
-        int snap_n;
-        EnterCriticalSection(&g_hub.cs);
-        snap_n = g_hub.count;
-        memcpy(snap, g_hub.conns, snap_n * sizeof(snap[0]));
-        LeaveCriticalSection(&g_hub.cs);
-
-        /* Update the value cache so late-joining browsers get a full snapshot */
-        if (opcode == MG_WEBSOCKET_OPCODE_TEXT)
-            cache_update(buf, bytes);
-
-        for (int i = 0; i < snap_n; i++) {
-            if (mg_websocket_write(snap[i], opcode,
-                                   (char *)buf, bytes) <= 0) {
-                /* Dead connection — remove from the live list */
-                log_msg("hub: write failed for browser %d, removing", i);
-                EnterCriticalSection(&g_hub.cs);
-                for (int j = 0; j < g_hub.count; j++) {
-                    if (g_hub.conns[j] == snap[i]) {
-                        int last = --g_hub.count;
-                        free(g_hub.sub_msgs[j]);
-                        g_hub.sub_msgs[j] = g_hub.sub_msgs[last];
-                        g_hub.conns[j]    = g_hub.conns[last];
-                        g_hub.sub_msgs[last] = NULL;
-                        break;
-                    }
-                }
-                LeaveCriticalSection(&g_hub.cs);
-            }
+        for (int i = 0; i < MAX_BROWSERS; i++) {
+            if (!subs[i]) continue;
+            log_msg("hub: replaying subscription for browser slot %d", i);
+            xp_mutex_lock(&g_hub.send_cs);
+            if (g_xp_conn)
+                mg_websocket_client_write(g_xp_conn, MG_WEBSOCKET_OPCODE_TEXT,
+                                          subs[i], strlen(subs[i]));
+            xp_mutex_unlock(&g_hub.send_cs);
+            free(subs[i]);
         }
     }
 
-    hub_close_xplane();
-    log_msg("hub: recv thread exiting");
-    return 0;
+    /* Clean up the upstream connection before the thread exits. */
+    xp_mutex_lock(&g_hub.send_cs);
+    struct mg_connection *xp = g_xp_conn;
+    g_xp_conn = NULL;
+    xp_mutex_unlock(&g_hub.send_cs);
+    if (xp) mg_close_connection(xp);
+
+    log_msg("hub: reconnect thread exiting");
 }
+
+/* Thin platform wrappers so the loop body stays #ifdef-free. */
+#ifdef _WIN32
+static DWORD WINAPI hub_reconnect_thread(LPVOID arg) { hub_reconnect_loop(); return 0; }
+#else
+static void *hub_reconnect_thread(void *arg) { hub_reconnect_loop(); return NULL; }
+#endif
 
 /* ── WebSocket civetweb callbacks (browser side) ─────────────────────────── */
-
-static int ws_connect(const struct mg_connection *conn, void *cbdata) {
-    return 0; /* accept all */
-}
+static int ws_connect(const struct mg_connection *conn, void *cbdata) { return 0; }
 
 static void ws_ready(struct mg_connection *conn, void *cbdata) {
-    /* Check capacity before committing so we don't hold the lock
-     * across the potentially-slow cache_flush write below. */
-    EnterCriticalSection(&g_hub.cs);
+    xp_mutex_lock(&g_hub.cs);
     int full = (g_hub.count >= MAX_BROWSERS);
-    LeaveCriticalSection(&g_hub.cs);
+    xp_mutex_unlock(&g_hub.cs);
+    if (full) { log_msg("hub: MAX_BROWSERS reached"); mg_close_connection(conn); return; }
 
-    if (full) {
-        log_msg("hub: MAX_BROWSERS (%d) reached — rejecting connection", MAX_BROWSERS);
-        mg_close_connection(conn);
-        return;
-    }
-
-    /* Flush the cached snapshot BEFORE adding to g_hub.conns so the recv
-     * thread cannot write to this connection concurrently with cache_flush.
-     * Any updates that arrive between here and the add below are fine: the
-     * snapshot already reflects the latest known state. */
+    /* Send snapshot before adding to the list so the recv thread can't
+     * write to this connection concurrently with cache_flush. */
     cache_flush(conn);
 
-    EnterCriticalSection(&g_hub.cs);
+    xp_mutex_lock(&g_hub.cs);
     if (g_hub.count < MAX_BROWSERS) {
         g_hub.conns[g_hub.count++] = conn;
         log_msg("hub: browser connected (%d/%d)", g_hub.count, MAX_BROWSERS);
     }
-    LeaveCriticalSection(&g_hub.cs);
+    xp_mutex_unlock(&g_hub.cs);
 }
 
-/* Forward messages from a browser to X-Plane (subscriptions, etc.) */
 static int ws_data(struct mg_connection *conn, int bits, char *data,
                    size_t len, void *cbdata) {
     int op = bits & 0x0f;
     if (op == MG_WEBSOCKET_OPCODE_CONNECTION_CLOSE) return 0;
 
-    /* Store subscription messages for X-Plane reconnect replay.
-     * civetweb null-terminates text frames before calling ws_data, so
-     * strstr is safe.  We store only the last subscription per browser;
-     * commands (command_set_is_active) are one-shot and not replayed. */
+    /* Store subscription messages so we can replay them on X-Plane reconnect. */
     if (op == MG_WEBSOCKET_OPCODE_TEXT &&
         strstr(data, "\"dataref_subscribe") != NULL) {
-        char *copy = _strdup(data);
+        char *copy = xp_strdup(data);
         if (copy) {
-            EnterCriticalSection(&g_hub.cs);
+            xp_mutex_lock(&g_hub.cs);
             for (int i = 0; i < g_hub.count; i++) {
                 if (g_hub.conns[i] == conn) {
                     free(g_hub.sub_msgs[i]);
-                    g_hub.sub_msgs[i] = copy; copy = NULL;
-                    break;
+                    g_hub.sub_msgs[i] = copy; copy = NULL; break;
                 }
             }
-            LeaveCriticalSection(&g_hub.cs);
-            free(copy);  /* free if connection not found (already closed) */
+            xp_mutex_unlock(&g_hub.cs);
+            free(copy);
         }
-        /* Replay the full cache NOW — the browser sent its subscription only
-         * after fetchAllDatarefs completed, so _idToName is populated and the
-         * snapshot will be processed correctly.  The earlier ws_ready flush
-         * arrived before that map was ready and was silently discarded. */
+        /* Second flush: browser sends subscription after fetchAllDatarefs,
+         * so _idToName is now populated and the snapshot will be processed. */
         cache_flush(conn);
     }
 
-    if (!g_hub.hWs) return 1;  /* X-Plane not connected — subscription stored, drop send */
-    WINHTTP_WEB_SOCKET_BUFFER_TYPE t =
-        (op == MG_WEBSOCKET_OPCODE_BINARY)
-        ? WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE
-        : WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE;
-    /* Serialise: WinHttpWebSocketSend must not be called concurrently */
-    EnterCriticalSection(&g_hub.send_cs);
-    WinHttpWebSocketSend(g_hub.hWs, t, data, (DWORD)len);
-    LeaveCriticalSection(&g_hub.send_cs);
+    /* Forward to X-Plane. */
+    xp_mutex_lock(&g_hub.send_cs);
+    if (g_xp_conn)
+        mg_websocket_client_write(g_xp_conn, op, data, len);
+    xp_mutex_unlock(&g_hub.send_cs);
     return 1;
 }
 
 static void ws_close(const struct mg_connection *conn, void *cbdata) {
-    EnterCriticalSection(&g_hub.cs);
+    xp_mutex_lock(&g_hub.cs);
     for (int i = 0; i < g_hub.count; i++) {
         if (g_hub.conns[i] == conn) {
             int last = --g_hub.count;
@@ -630,29 +550,19 @@ static void ws_close(const struct mg_connection *conn, void *cbdata) {
         }
     }
     log_msg("hub: browser disconnected (%d remaining)", g_hub.count);
-    LeaveCriticalSection(&g_hub.cs);
+    xp_mutex_unlock(&g_hub.cs);
 }
 
-/* ── ACF file probe ──────────────────────────────────────────────────────────── */
-/*
- * GET /acf  →  {"num_cylinders_per_engine": N, ...}
- * Reads the loaded aircraft's .acf text file and extracts values that are not
- * available via X-Plane's dataref API (e.g. cylinder count per engine).
- * Returns 200 with zeros for fields not found. Falls back gracefully on error.
- */
+/* ── ACF file probe ───────────────────────────────────────────────────────── */
 static int handle_acf(struct mg_connection *conn, void *cbdata) {
-    char acf_file[MAX_PATH] = {0};
-    char acf_path[MAX_PATH] = {0};
+    char acf_file[MAX_PATH] = {0}, acf_path[MAX_PATH] = {0};
     XPLMGetNthAircraftModel(0, acf_file, acf_path);
-
     int num_cyls = 0;
-
     if (acf_path[0]) {
         FILE *f = fopen(acf_path, "r");
         if (f) {
             char line[512];
             while (fgets(line, sizeof(line), f)) {
-                /* Lines of interest: "P acf/_num_cyls  6" */
                 if (strncmp(line, "P acf/_num_cylinders", 20) == 0) {
                     const char *p = line + 20;
                     while (*p == ' ' || *p == '\t') p++;
@@ -662,37 +572,27 @@ static int handle_acf(struct mg_connection *conn, void *cbdata) {
                 }
             }
             fclose(f);
-        } else {
-            log_msg("handle_acf: cannot open %s", acf_path);
         }
     }
-
     char resp[128];
-    int  rlen = snprintf(resp, sizeof(resp),
-                         "{\"num_cylinders_per_engine\":%d}", num_cyls);
-
+    int rlen = snprintf(resp, sizeof(resp), "{\"num_cylinders_per_engine\":%d}", num_cyls);
     mg_printf(conn,
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: application/json\r\n"
-        "Content-Length: %d\r\n"
-        "Access-Control-Allow-Origin: *\r\n"
-        "\r\n%s",
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: %d\r\nAccess-Control-Allow-Origin: *\r\n\r\n%s",
         rlen, resp);
     return 1;
 }
 
-/* ── HTTP server start / stop ────────────────────────────────────────────────── */
+/* ── HTTP server start / stop ─────────────────────────────────────────────── */
 static int server_start(void) {
     if (g_running) return 1;
 
-    /* Ensure panels.json exists */
     FILE *pf = fopen(g_panels_path, "r");
     if (!pf) { pf = fopen(g_panels_path, "w"); if (pf) { fputs("[]", pf); fclose(pf); } }
     else fclose(pf);
 
     char port_str[16];
     snprintf(port_str, sizeof(port_str), "%d", g_port);
-
     const char *opts[] = {
         "document_root",            g_web_root,
         "listening_ports",          port_str,
@@ -701,28 +601,31 @@ static int server_start(void) {
         "tcp_nodelay",              "1",
         NULL
     };
-
     struct mg_callbacks cbs = {0};
     g_ctx = mg_start(&cbs, NULL, opts);
     if (!g_ctx) { log_msg("Failed to start HTTP server on port %d", g_port); return 0; }
 
-    mg_set_request_handler(g_ctx, "/api/",     handle_api,    NULL);
-    mg_set_request_handler(g_ctx, "/acf",      handle_acf,    NULL);
-    mg_set_request_handler(g_ctx, "/panels",   handle_panels, NULL);
-    mg_set_request_handler(g_ctx, "/panels/",  handle_panels, NULL);
+    mg_set_request_handler(g_ctx, "/api/",    handle_api,    NULL);
+    mg_set_request_handler(g_ctx, "/acf",     handle_acf,    NULL);
+    mg_set_request_handler(g_ctx, "/panels",  handle_panels, NULL);
+    mg_set_request_handler(g_ctx, "/panels/", handle_panels, NULL);
     mg_set_websocket_handler(g_ctx, "/ws",
         ws_connect, ws_ready, ws_data, ws_close, NULL);
 
-    /* Start the shared X-Plane WebSocket hub */
     cache_init();
-    InitializeCriticalSection(&g_hub.cs);
-    InitializeCriticalSection(&g_hub.send_cs);
+    xp_mutex_init(&g_hub.cs);
+    xp_mutex_init(&g_hub.send_cs);
     memset(g_hub.conns,    0, sizeof(g_hub.conns));
     memset(g_hub.sub_msgs, 0, sizeof(g_hub.sub_msgs));
     g_hub.count = 0;
+
+#ifdef _WIN32
     InterlockedExchange(&g_hub.running, 1);
-    hub_connect_xplane();   /* best-effort; thread will retry if X-Plane not up yet */
-    g_hub.thread = CreateThread(NULL, 0, hub_recv_thread, NULL, 0, NULL);
+    g_hub.thread = CreateThread(NULL, 0, hub_reconnect_thread, NULL, 0, NULL);
+#else
+    g_hub.running = 1;
+    pthread_create(&g_hub.thread, NULL, hub_reconnect_thread, NULL);
+#endif
 
     g_running = 1;
     log_msg("Server started on port %d  web_root=%s", g_port, g_web_root);
@@ -732,101 +635,110 @@ static int server_start(void) {
 static void server_stop(void) {
     if (!g_running) return;
 
-    /* Stop the hub thread first */
+    /* Signal the reconnect thread to stop and wait for it.
+     * The thread closes g_xp_conn as its last action. */
+#ifdef _WIN32
     InterlockedExchange(&g_hub.running, 0);
-    hub_close_xplane();   /* unblocks WinHttpWebSocketReceive */
     if (g_hub.thread) {
-        WaitForSingleObject(g_hub.thread, 4000);
+        WaitForSingleObject(g_hub.thread, 6000);
         CloseHandle(g_hub.thread);
         g_hub.thread = NULL;
     }
-    /* Stop civetweb BEFORE deleting critical sections — mg_stop() fires ws_close
-     * callbacks for any still-connected browsers, which call EnterCriticalSection
-     * on g_hub.cs.  Deleting the CS first causes an access violation on disable. */
+#else
+    g_hub.running = 0;
+    pthread_join(g_hub.thread, NULL);
+#endif
+
+    /* Stop civetweb AFTER the reconnect thread exits so the ws_close
+     * callbacks (which lock g_hub.cs) are still safe to call. */
     mg_stop(g_ctx); g_ctx = NULL; g_running = 0;
 
     for (int i = 0; i < MAX_BROWSERS; i++) { free(g_hub.sub_msgs[i]); g_hub.sub_msgs[i] = NULL; }
-    DeleteCriticalSection(&g_hub.cs);
-    DeleteCriticalSection(&g_hub.send_cs);
+    xp_mutex_free(&g_hub.cs);
+    xp_mutex_free(&g_hub.send_cs);
     cache_free();
-
     log_msg("Server stopped");
 }
 
-/* ── IP enumeration ──────────────────────────────────────────────────────────── */
-
+/* ── IP enumeration ───────────────────────────────────────────────────────── */
 static int is_private_ip(const char *ip) {
     if (strncmp(ip, "10.", 3) == 0) return 1;
     if (strncmp(ip, "192.168.", 8) == 0) return 1;
-    if (strncmp(ip, "172.", 4) == 0) {
-        int b = atoi(ip + 4);   /* second octet */
-        if (b >= 16 && b <= 31) return 1;
-    }
+    if (strncmp(ip, "172.", 4) == 0) { int b = atoi(ip+4); if (b >= 16 && b <= 31) return 1; }
     return 0;
 }
 
-/* Enumerate all UP IPv4 addresses via WSAIoctl — no extra libs needed.
- * Result is sorted: RFC-1918 private addresses first (home/office LAN),
- * then everything else (Docker, VMware, public IPs). */
+#ifdef _WIN32
 static void collect_ips(void) {
     g_ip_count = 0;
-
     SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s == INVALID_SOCKET) return;
-
-    INTERFACE_INFO ifaces[32];
-    DWORD returned = 0;
+    INTERFACE_INFO ifaces[32]; DWORD returned = 0;
     int ok = (WSAIoctl(s, SIO_GET_INTERFACE_LIST, NULL, 0,
                        ifaces, sizeof(ifaces), &returned, NULL, NULL) != SOCKET_ERROR);
     closesocket(s);
     if (!ok) return;
-
     int n = (int)(returned / sizeof(INTERFACE_INFO));
-
-    /* Collect all valid non-loopback addresses, noting which are private */
-    char   tmp[MAX_IPS][64];
-    int    priv[MAX_IPS];
-    int    tmp_n = 0;
-
+    char tmp[MAX_IPS][64]; int priv[MAX_IPS]; int tmp_n = 0;
     for (int i = 0; i < n && tmp_n < MAX_IPS; i++) {
         if (!(ifaces[i].iiFlags & IFF_UP)) continue;
-        struct sockaddr_in *addr = (struct sockaddr_in *)&ifaces[i].iiAddress;
-        if (addr->sin_family != AF_INET) continue;
-        char ip[64];
-        inet_ntop(AF_INET, &addr->sin_addr, ip, sizeof(ip));
-        if (strncmp(ip, "127.", 4) == 0) continue;
-        if (strcmp(ip, "0.0.0.0") == 0) continue;
-        strncpy(tmp[tmp_n], ip, 63);
-        priv[tmp_n] = is_private_ip(ip);
-        tmp_n++;
+        struct sockaddr_in *a = (struct sockaddr_in *)&ifaces[i].iiAddress;
+        if (a->sin_family != AF_INET) continue;
+        char ip[64]; inet_ntop(AF_INET, &a->sin_addr, ip, sizeof(ip));
+        if (strncmp(ip, "127.", 4) == 0 || strcmp(ip, "0.0.0.0") == 0) continue;
+        strncpy(tmp[tmp_n], ip, 63); priv[tmp_n++] = is_private_ip(ip);
     }
-
-    /* Private/home addresses first, then all others */
     for (int i = 0; i < tmp_n && g_ip_count < MAX_IPS; i++)
         if ( priv[i]) strncpy(g_ips[g_ip_count++], tmp[i], 63);
     for (int i = 0; i < tmp_n && g_ip_count < MAX_IPS; i++)
         if (!priv[i]) strncpy(g_ips[g_ip_count++], tmp[i], 63);
 }
+#else
+static void collect_ips(void) {
+    g_ip_count = 0;
+    struct ifaddrs *ifap = NULL;
+    if (getifaddrs(&ifap) != 0) return;
+    char tmp[MAX_IPS][64]; int priv[MAX_IPS]; int tmp_n = 0;
+    for (struct ifaddrs *ifa = ifap; ifa && tmp_n < MAX_IPS; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+        if (!(ifa->ifa_flags & IFF_UP)) continue;
+        struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
+        char ip[64]; inet_ntop(AF_INET, &sa->sin_addr, ip, sizeof(ip));
+        if (strncmp(ip, "127.", 4) == 0) continue;
+        strncpy(tmp[tmp_n], ip, 63); priv[tmp_n++] = is_private_ip(ip);
+    }
+    freeifaddrs(ifap);
+    for (int i = 0; i < tmp_n && g_ip_count < MAX_IPS; i++)
+        if ( priv[i]) strncpy(g_ips[g_ip_count++], tmp[i], 63);
+    for (int i = 0; i < tmp_n && g_ip_count < MAX_IPS; i++)
+        if (!priv[i]) strncpy(g_ips[g_ip_count++], tmp[i], 63);
+}
+#endif
 
-/* ── Menu ────────────────────────────────────────────────────────────────────── */
-
+/* ── Menu / clipboard ─────────────────────────────────────────────────────── */
 static void copy_to_clipboard(const char *text) {
+#ifdef _WIN32
     if (!OpenClipboard(NULL)) return;
     EmptyClipboard();
     HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, strlen(text) + 1);
     if (hg) { memcpy(GlobalLock(hg), text, strlen(text)+1); GlobalUnlock(hg); SetClipboardData(CF_TEXT, hg); }
     CloseClipboard();
     XPLMSpeakString("URL copied to clipboard.");
+#elif defined(__APPLE__)
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "echo '%s' | pbcopy", text);
+    system(cmd);
+    XPLMSpeakString("URL copied to clipboard.");
+#else
+    log_msg("URL: %s", text);
+    XPLMSpeakString("URL logged to X-Plane log.");
+#endif
 }
 
-/* Rebuild the entire menu from scratch so IP entries can be added/removed
- * dynamically.  iref values: 0=toggle, 100=port, 10..10+MAX_IPS-1=copy URL[n]. */
 static void menu_rebuild(void) {
     XPLMClearAllMenuItems(g_menu);
-
     g_mi_toggle = XPLMAppendMenuItem(g_menu,
         g_running ? "Disable Server" : "Enable Server", (void*)0, 1);
-
     if (g_running) {
         collect_ips();
         if (g_ip_count == 0) {
@@ -841,14 +753,13 @@ static void menu_rebuild(void) {
     } else {
         XPLMAppendMenuItem(g_menu, "URL: (server offline)", (void*)10, 1);
     }
-
     XPLMAppendMenuSeparator(g_menu);
     char port_item[64];
     snprintf(port_item, sizeof(port_item), "Port: %d  (click to change)", g_port);
     g_mi_port = XPLMAppendMenuItem(g_menu, port_item, (void*)100, 1);
 }
 
-/* ── Port dialog (XPWidgets) ─────────────────────────────────────────────────── */
+/* ── Port dialog ──────────────────────────────────────────────────────────── */
 static int dlg_handler(XPWidgetMessage msg, XPWidgetID wid, intptr_t p1, intptr_t p2) {
     if (msg == xpMessage_CloseButtonPushed) { XPHideWidget(g_dlg); return 1; }
     if (msg == xpMsg_PushButtonPressed && wid == g_dlg_btn) {
@@ -869,18 +780,14 @@ static int dlg_handler(XPWidgetMessage msg, XPWidgetID wid, intptr_t p1, intptr_
 
 static void show_port_dialog(void) {
     if (!g_dlg) {
-        /* Coordinates: X-Plane GUI uses top-left origin, Y increases downward */
         int x = 100, y = 400, w = 280, h = 120;
         g_dlg = XPCreateWidget(x, y, x+w, y-h, 1,
             "XPanel Server — Port", 1, NULL, xpWidgetClass_MainWindow);
         XPSetWidgetProperty(g_dlg, xpProperty_MainWindowHasCloseBoxes, 1);
         XPAddWidgetCallback(g_dlg, dlg_handler);
-
         XPCreateWidget(x+12, y-32, x+90, y-50, 1, "Port:", 0, g_dlg, xpWidgetClass_Caption);
-
         g_dlg_field = XPCreateWidget(x+95, y-30, x+200, y-50, 1, "8088", 0, g_dlg, xpWidgetClass_TextField);
         XPSetWidgetProperty(g_dlg_field, xpProperty_TextFieldType, xpTextEntryField);
-
         g_dlg_btn = XPCreateWidget(x+95, y-65, x+200, y-85, 1, "Apply & Restart", 0, g_dlg, xpWidgetClass_Button);
         XPSetWidgetProperty(g_dlg_btn, xpProperty_ButtonType, xpPushButton);
         XPAddWidgetCallback(g_dlg_btn, dlg_handler);
@@ -908,64 +815,58 @@ static void menu_handler(void *mref, void *iref) {
     }
 }
 
-/* ── Plugin entry points ─────────────────────────────────────────────────────── */
+/* ── Plugin entry points ──────────────────────────────────────────────────── */
 PLUGIN_API int XPluginStart(char *name, char *sig, char *desc) {
     strncpy(name, "XPanel Server",            255);
     strncpy(sig,  "com.xpanelserver.plugin",  255);
     strncpy(desc, "Serves XPlane Network Panels web app on the LAN", 255);
 
-    InitializeCriticalSection(&g_cs);
+    xp_mutex_init(&g_cs);
 
-    /* Resolve paths from .xpl location */
     char xpl_path[MAX_PATH];
     XPLMGetPluginInfo(XPLMGetMyID(), NULL, xpl_path, NULL, NULL);
-    /* xpl_path = .../XPanelServer/win_x64/XPanelServer.xpl  — go up twice */
-    char *s = strrchr(xpl_path, '\\'); if (!s) s = strrchr(xpl_path, '/');
-    if (s) *s = '\0';  /* strip filename  → .../win_x64 */
-    s = strrchr(xpl_path, '\\'); if (!s) s = strrchr(xpl_path, '/');
-    if (s) *s = '\0';  /* strip platform  → .../XPanelServer */
+    /* Strip  .../XPanelServer/<platform>/XPanelServer.xpl  →  .../XPanelServer */
+    char *s = strrchr(xpl_path, '/');
+#ifdef _WIN32
+    { char *bs = strrchr(xpl_path, '\\'); if (!s || (bs && bs > s)) s = bs; }
+#endif
+    if (s) *s = '\0';
+    s = strrchr(xpl_path, '/');
+#ifdef _WIN32
+    { char *bs = strrchr(xpl_path, '\\'); if (!s || (bs && bs > s)) s = bs; }
+#endif
+    if (s) *s = '\0';
     strncpy(g_plugin_root, xpl_path, MAX_PATH - 1);
 
-    snprintf(g_resources, sizeof(g_resources), "%s\\Resources",           g_plugin_root);
-    snprintf(g_web_root,  sizeof(g_web_root),  "%s\\Resources\\web",      g_plugin_root);
-    snprintf(g_panels_path, sizeof(g_panels_path), "%s\\panels.json",     g_resources);
-    snprintf(g_config_path, sizeof(g_config_path), "%s\\config.json",     g_resources);
+    snprintf(g_resources,   sizeof(g_resources),   "%s/Resources",     g_plugin_root);
+    snprintf(g_web_root,    sizeof(g_web_root),     "%s/Resources/web", g_plugin_root);
+    snprintf(g_panels_path, sizeof(g_panels_path),  "%s/panels.json",   g_resources);
+    snprintf(g_config_path, sizeof(g_config_path),  "%s/config.json",   g_resources);
 
-    CreateDirectoryA(g_resources, NULL);
-    CreateDirectoryA(g_web_root,  NULL);
-
+    xp_mkdir(g_resources);
+    xp_mkdir(g_web_root);
     config_load();
 
-    /* Winsock (needed for gethostname / getaddrinfo) */
+#ifdef _WIN32
     WSADATA wsd; WSAStartup(MAKEWORD(2, 2), &wsd);
+#endif
 
-    /* Build Plugin menu:  Plugins → XPanel Server → [items] */
     int root_idx = XPLMAppendMenuItem(XPLMFindPluginsMenu(), "XPanel Server", NULL, 1);
     g_menu = XPLMCreateMenu("XPanel Server", XPLMFindPluginsMenu(), root_idx, menu_handler, NULL);
-    menu_rebuild();   /* populates all items; server is offline at this point */
-
+    menu_rebuild();
     log_msg("Plugin loaded. Root: %s", g_plugin_root);
     return 1;
 }
 
 PLUGIN_API void XPluginStop(void) {
     server_stop();
+#ifdef _WIN32
     WSACleanup();
-    DeleteCriticalSection(&g_cs);
+#endif
+    xp_mutex_free(&g_cs);
     log_msg("Plugin unloaded");
 }
 
-PLUGIN_API int XPluginEnable(void) {
-    server_start();
-    menu_rebuild();
-    return 1;
-}
-
-PLUGIN_API void XPluginDisable(void) {
-    server_stop();
-    menu_rebuild();
-}
-
-PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from, int msg, void *param) {
-    /* Nothing to handle yet */
-}
+PLUGIN_API int XPluginEnable(void)  { server_start(); menu_rebuild(); return 1; }
+PLUGIN_API void XPluginDisable(void) { server_stop();  menu_rebuild(); }
+PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from, int msg, void *param) {}

@@ -1,0 +1,219 @@
+# Builds XPanelServer.xpl for Windows, macOS, and Linux on every push/PR.
+# On version tags (v*.*.*) it also creates a GitHub Release with a zip
+# containing the ready-to-install plugin folder.
+#
+# X-Plane SDK is downloaded at build time (not committed to the repo).
+# The SDK zip URL is pinned to SDK 4.x — update XPSDK_URL if Laminar
+# releases a newer version.
+
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    tags:     ["v*.*.*"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  XPSDK_URL: "https://developer.x-plane.com/wp-content/plugins/code-sample-generation/sdk_zip_files/XPSDK430.zip"
+  XPSDK_SHA256: ""   # leave empty to skip checksum; fill in for reproducible builds
+
+jobs:
+  # ── Windows x64 ─────────────────────────────────────────────────────────────
+  build-windows:
+    name: Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download X-Plane SDK
+        shell: pwsh
+        working-directory: xplane-plugin
+        run: |
+          Invoke-WebRequest -Uri "$env:XPSDK_URL" -OutFile sdk.zip
+          Expand-Archive sdk.zip -DestinationPath sdk_raw
+          # The zip may contain a top-level folder or extract flat.
+          # Find CHeaders to locate the SDK root regardless of layout.
+          $cheaders = Get-ChildItem -Recurse -Filter CHeaders sdk_raw | Select-Object -First 1
+          if ($cheaders) {
+            Move-Item $cheaders.Parent.FullName sdk
+          } else {
+            Move-Item sdk_raw sdk
+          }
+          Remove-Item sdk.zip -Force
+          if (Test-Path sdk_raw) { Remove-Item sdk_raw -Recurse -Force }
+
+      - name: Configure (CMake)
+        working-directory: xplane-plugin
+        run: >
+          cmake -B build
+          -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Build
+        working-directory: xplane-plugin
+        run: cmake --build build --config RelWithDebInfo
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: XPanelServer-win_x64
+          path: xplane-plugin/build/dist/XPanelServer/
+          if-no-files-found: error
+
+  # ── macOS x64 ───────────────────────────────────────────────────────────────
+  build-macos:
+    name: macOS x64
+    runs-on: macos-13   # last Intel runner; switch to macos-latest for Apple Silicon
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download X-Plane SDK
+        working-directory: xplane-plugin
+        run: |
+          curl -fsSL "$XPSDK_URL" -o sdk.zip
+          unzip -q sdk.zip -d sdk_raw
+          # Find the SDK root by locating CHeaders regardless of zip layout
+          sdk_root=$(find sdk_raw -name CHeaders -maxdepth 3 | head -1 | xargs dirname)
+          mv "$sdk_root" sdk
+          rm -rf sdk.zip sdk_raw
+
+      - name: Configure (CMake)
+        working-directory: xplane-plugin
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_OSX_ARCHITECTURES=x86_64
+
+      - name: Build
+        working-directory: xplane-plugin
+        run: cmake --build build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: XPanelServer-mac_x64
+          path: xplane-plugin/build/dist/XPanelServer/
+          if-no-files-found: error
+
+  # ── Linux x64 ───────────────────────────────────────────────────────────────
+  build-linux:
+    name: Linux x64
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get install -y cmake ninja-build
+
+      - name: Download X-Plane SDK
+        working-directory: xplane-plugin
+        run: |
+          curl -fsSL "$XPSDK_URL" -o sdk.zip
+          unzip -q sdk.zip -d sdk_raw
+          # Find the SDK root by locating CHeaders regardless of zip layout
+          sdk_root=$(find sdk_raw -name CHeaders -maxdepth 3 | head -1 | xargs dirname)
+          mv "$sdk_root" sdk
+          rm -rf sdk.zip sdk_raw
+
+      - name: Configure (CMake)
+        working-directory: xplane-plugin
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Build
+        working-directory: xplane-plugin
+        run: cmake --build build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: XPanelServer-lin_x64
+          path: xplane-plugin/build/dist/XPanelServer/
+          if-no-files-found: error
+
+  # ── Release ──────────────────────────────────────────────────────────────────
+  # Runs only on version tags.  Downloads all three platform artifacts,
+  # merges them into one XPanelServer folder (Resources/ is shared),
+  # and creates a GitHub Release with a single installable zip.
+  release:
+    name: Create Release
+    runs-on: ubuntu-22.04
+    needs: [build-windows, build-macos, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write   # needed to create the release
+
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: XPanelServer-win_x64
+          path: dist/XPanelServer
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: XPanelServer-mac_x64
+          path: dist/XPanelServer
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: XPanelServer-lin_x64
+          path: dist/XPanelServer
+
+      - name: Verify expected files
+        run: |
+          echo "=== Plugin layout ==="
+          find dist/XPanelServer -type f | sort
+          for xpl in \
+              dist/XPanelServer/win_x64/XPanelServer.xpl \
+              dist/XPanelServer/mac_x64/XPanelServer.xpl \
+              dist/XPanelServer/lin_x64/XPanelServer.xpl; do
+            if [ ! -f "$xpl" ]; then
+              echo "ERROR: missing $xpl"; exit 1
+            fi
+          done
+          echo "All platform binaries present."
+
+      - name: Create release zip
+        run: |
+          TAG="${GITHUB_REF_NAME}"          # e.g. v1.2.0
+          ZIP="XPanelServer-${TAG}.zip"
+          cd dist
+          zip -r "../${ZIP}" XPanelServer
+          echo "ZIP=${ZIP}" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "XPanelServer ${{ github.ref_name }}"
+          body: |
+            ## Installation
+
+            1. Download `${{ env.ZIP }}` below.
+            2. Unzip it — you will get an `XPanelServer/` folder.
+            3. Copy that folder to `<X-Plane 12>/Resources/plugins/`.
+            4. (Re)start X-Plane 12.
+
+            The plugin will appear under **Plugins → XPanel Server**.
+
+            ### Included platforms
+            | Folder | Platform |
+            |---|---|
+            | `win_x64/` | Windows 64-bit |
+            | `mac_x64/` | macOS 64-bit |
+            | `lin_x64/` | Linux 64-bit |
+
+            All features (REST proxy, WebSocket hub, static files, panel config)
+            work on all three platforms.
+          files: "${{ env.ZIP }}"
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
