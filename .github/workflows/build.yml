@@ -1,6 +1,9 @@
-# Builds XPanelServer.xpl for Windows, macOS, and Linux on every push/PR.
-# On version tags (v*.*.*) it also creates a GitHub Release with a zip
-# containing the ready-to-install plugin folder.
+# Builds XPanelServer.xpl for Windows, macOS, and Linux — but only when
+# C source / CMakeLists.txt changes.  On version tags (v*.*.*) it also
+# creates a GitHub Release.  If the C source is unchanged the release reuses
+# the .xpl binaries from the latest previous release and just overlays the
+# fresh web-app files, so a pure JS/HTML change ships in seconds without a
+# full recompile.
 #
 # X-Plane SDK is downloaded at build time (not committed to the repo).
 # The SDK zip URL is pinned to SDK 4.x — update XPSDK_URL if Laminar
@@ -20,10 +23,38 @@ env:
   XPSDK_SHA256: ""   # leave empty to skip checksum; fill in for reproducible builds
 
 jobs:
-  # ── Windows x64 ─────────────────────────────────────────────────────────────
+  # ── Detect whether C/CMake source changed ────────────────────────────────────
+  changes:
+    name: Detect C changes
+    runs-on: ubuntu-22.04
+    outputs:
+      c_changed: ${{ steps.check.outputs.c_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - id: check
+        name: Check xplane-plugin/src and CMakeLists.txt
+        run: |
+          if ! git rev-parse HEAD~1 >/dev/null 2>&1; then
+            # First commit in repo — always build
+            echo "c_changed=true" >> $GITHUB_OUTPUT
+            echo "First commit — will compile"
+          elif git diff --quiet HEAD~1 HEAD -- xplane-plugin/src/ xplane-plugin/CMakeLists.txt; then
+            echo "c_changed=false" >> $GITHUB_OUTPUT
+            echo "No C/CMake changes — compilation skipped"
+          else
+            echo "c_changed=true" >> $GITHUB_OUTPUT
+            echo "C/CMake changes detected — will compile"
+          fi
+
+  # ── Windows x64 ──────────────────────────────────────────────────────────────
   build-windows:
     name: Windows x64
     runs-on: windows-latest
+    needs: changes
+    if: needs.changes.outputs.c_changed == 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -63,10 +94,12 @@ jobs:
           path: xplane-plugin/build/dist/XPanelServer/
           if-no-files-found: error
 
-  # ── macOS x64 ───────────────────────────────────────────────────────────────
+  # ── macOS x64 ────────────────────────────────────────────────────────────────
   build-macos:
     name: macOS x64
     runs-on: macos-latest  # last Intel runner is 13, but has near no workes; switch to macos-latest for Apple Silicon
+    needs: changes
+    if: needs.changes.outputs.c_changed == 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -99,10 +132,12 @@ jobs:
           path: xplane-plugin/build/dist/XPanelServer/
           if-no-files-found: error
 
-  # ── Linux x64 ───────────────────────────────────────────────────────────────
+  # ── Linux x64 ────────────────────────────────────────────────────────────────
   build-linux:
     name: Linux x64
     runs-on: ubuntu-22.04
+    needs: changes
+    if: needs.changes.outputs.c_changed == 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -138,35 +173,78 @@ jobs:
           if-no-files-found: error
 
   # ── Release ──────────────────────────────────────────────────────────────────
-  # Runs only on version tags.  Downloads all three platform artifacts,
-  # merges them into one XPanelServer folder (Resources/ is shared),
-  # and creates a GitHub Release with a single installable zip.
+  # Runs only on version tags.
+  #
+  # When C changed   → downloads the freshly compiled artifacts.
+  # When C unchanged → pulls the .xpl binaries from the latest GitHub release
+  #                    and overlays the current web-app files from the checkout.
+  #
+  # The `always()` guard is required so this job still runs when the build
+  # jobs were skipped (i.e. C did not change).
   release:
     name: Create Release
     runs-on: ubuntu-22.04
-    needs: [build-windows, build-macos, build-linux]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [changes, build-windows, build-macos, build-linux]
+    if: |
+      always() &&
+      startsWith(github.ref, 'refs/tags/v') &&
+      needs.changes.result == 'success' &&
+      (needs.build-windows.result == 'success' || needs.build-windows.result == 'skipped') &&
+      (needs.build-macos.result  == 'success' || needs.build-macos.result  == 'skipped') &&
+      (needs.build-linux.result  == 'success' || needs.build-linux.result  == 'skipped')
     permissions:
       contents: write   # needed to create the release
 
     steps:
+      - uses: actions/checkout@v4
+
+      # ── Path A: C changed — use freshly compiled artifacts ──────────────────
       - name: Download Windows artifact
+        if: needs.changes.outputs.c_changed == 'true'
         uses: actions/download-artifact@v4
         with:
           name: XPanelServer-win_x64
           path: dist/XPanelServer
 
       - name: Download macOS artifact
+        if: needs.changes.outputs.c_changed == 'true'
         uses: actions/download-artifact@v4
         with:
           name: XPanelServer-mac_x64
           path: dist/XPanelServer
 
       - name: Download Linux artifact
+        if: needs.changes.outputs.c_changed == 'true'
         uses: actions/download-artifact@v4
         with:
           name: XPanelServer-lin_x64
           path: dist/XPanelServer
+
+      # ── Path B: C unchanged — reuse .xpl binaries from latest release ───────
+      - name: Reuse binaries from previous release
+        if: needs.changes.outputs.c_changed == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "C source unchanged — reusing .xpl binaries from latest GitHub release"
+          gh release download --pattern "*.zip" --dir prev_release --repo "${{ github.repository }}"
+          unzip -q prev_release/*.zip -d prev_dist
+          mkdir -p dist/XPanelServer/win_x64 dist/XPanelServer/mac_x64 dist/XPanelServer/lin_x64
+          cp prev_dist/XPanelServer/win_x64/XPanelServer.xpl dist/XPanelServer/win_x64/
+          cp prev_dist/XPanelServer/mac_x64/XPanelServer.xpl dist/XPanelServer/mac_x64/
+          cp prev_dist/XPanelServer/lin_x64/XPanelServer.xpl dist/XPanelServer/lin_x64/
+
+      # ── Common: overlay web app from current checkout ────────────────────────
+      # This always runs so that JS/HTML changes are included regardless of
+      # whether a recompile happened.
+      - name: Copy web app into Resources
+        run: |
+          mkdir -p dist/XPanelServer/Resources/web
+          cp xplane-panel/index.html    dist/XPanelServer/Resources/web/
+          cp xplane-panel/panel.html    dist/XPanelServer/Resources/web/
+          cp xplane-panel/manifest.json dist/XPanelServer/Resources/web/
+          cp -r xplane-panel/js         dist/XPanelServer/Resources/web/
+          cp -r xplane-panel/images     dist/XPanelServer/Resources/web/
 
       - name: Verify expected files
         run: |

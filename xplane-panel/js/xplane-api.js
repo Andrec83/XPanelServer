@@ -4,28 +4,16 @@ const PROXY_PORT = parseInt(location.port) || 8088
 const RECONNECT_BASE = 1000
 const RECONNECT_MAX = 30000
 
-// When running on localhost, talk directly to X-Plane on :8086.
-// When on a LAN hostname/IP, everything goes through the XPanelServer plugin.
-
 function _capabilitiesUrl() {
-  const isLocal = _host === 'localhost' || _host === '127.0.0.1'
-  return isLocal
-    ? `http://${_host}:8086/api/capabilities`
-    : `http://${_host}:${PROXY_PORT}/api/capabilities`
+  return `http://${_host}:${PROXY_PORT}/api/capabilities`
 }
 
 function _restBase() {
-  const isLocal = _host === 'localhost' || _host === '127.0.0.1'
-  return isLocal
-    ? `http://${_host}:8086`
-    : `http://${_host}:${PROXY_PORT}/api`
+  return `http://${_host}:${PROXY_PORT}/api`
 }
 
 function _wsUrl() {
-  const isLocal = _host === 'localhost' || _host === '127.0.0.1'
-  return isLocal
-    ? `ws://${_host}:8086/api/v3`
-    : `ws://${_host}:${PROXY_PORT}/ws`
+  return `ws://${_host}:${PROXY_PORT}/ws`
 }
 
 let _host = 'localhost'

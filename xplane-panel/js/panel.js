@@ -225,7 +225,7 @@ async function connectAndRun(panel, host) {
     startHUDUpdater()
 
   } catch (err) {
-    showOverlay(`Cannot reach X-Plane at ${host}:8080\n${err.message}`)
+    showOverlay(`Cannot reach X-Plane at ${host}:${location.port || 8088}\n${err.message}`)
     updateStatusDot(false)
     setTimeout(() => connectAndRun(panel, host), 5000)
   }
