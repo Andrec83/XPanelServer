@@ -231,6 +231,9 @@ jobs:
           unzip -q prev_release/*.zip -d prev_dist
           mkdir -p dist/XPanelServer/win_x64 dist/XPanelServer/mac_x64 dist/XPanelServer/lin_x64
           cp prev_dist/XPanelServer/win_x64/XPanelServer.xpl dist/XPanelServer/win_x64/
+          # .pdb is valid as long as the binary hasn't changed
+          [ -f prev_dist/XPanelServer/win_x64/XPanelServer.pdb ] && \
+            cp prev_dist/XPanelServer/win_x64/XPanelServer.pdb dist/XPanelServer/win_x64/
           cp prev_dist/XPanelServer/mac_x64/XPanelServer.xpl dist/XPanelServer/mac_x64/
           cp prev_dist/XPanelServer/lin_x64/XPanelServer.xpl dist/XPanelServer/lin_x64/
 
@@ -258,6 +261,9 @@ jobs:
               echo "ERROR: missing $xpl"; exit 1
             fi
           done
+          [ -f dist/XPanelServer/win_x64/XPanelServer.pdb ] \
+            && echo "Windows .pdb present." \
+            || echo "WARNING: Windows .pdb missing (crash dumps will lack symbols)"
           echo "All platform binaries present."
 
       - name: Create release zip
