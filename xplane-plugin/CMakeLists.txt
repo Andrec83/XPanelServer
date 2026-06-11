@@ -105,6 +105,11 @@ if(WIN32)
         RUNTIME_OUTPUT_DIRECTORY_RELEASE        "${_DIST}"
         RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${_DIST}"
         RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL     "${_DIST}"
+        PDB_OUTPUT_DIRECTORY                    "${_DIST}"
+        PDB_OUTPUT_DIRECTORY_DEBUG              "${_DIST}"
+        PDB_OUTPUT_DIRECTORY_RELEASE            "${_DIST}"
+        PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO     "${_DIST}"
+        PDB_OUTPUT_DIRECTORY_MINSIZEREL         "${_DIST}"
         MSVC_RUNTIME_LIBRARY                    "MultiThreadedDLL"
     )
 endif()

@@ -13,8 +13,7 @@ name: Build
 
 on:
   push:
-    branches: ["**"]
-    tags:     ["v*.*.*"]
+    tags: ["v*.*.*"]
   pull_request:
     branches: ["main"]
 
