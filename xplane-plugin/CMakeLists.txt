@@ -132,6 +132,7 @@ if(APPLE)
         "-framework XPLM"
         "-framework XPWidgets"
         "-framework OpenGL"
+        "-framework CoreFoundation"
         "-undefined dynamic_lookup"
     )
 

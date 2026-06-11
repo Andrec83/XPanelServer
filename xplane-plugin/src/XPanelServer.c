@@ -30,7 +30,11 @@
     #define xp_sleep_ms(ms)   Sleep(ms)
     #define xp_strdup         _strdup
     #define xp_mkdir(p)       CreateDirectoryA((p), NULL)
-#else
+#elif defined(__APPLE__)
+    #include <CoreFoundation/CoreFoundation.h>
+#endif
+
+#ifndef _WIN32
     #include <pthread.h>
     #include <unistd.h>
     #include <sys/stat.h>
@@ -50,6 +54,28 @@
     #ifndef MAX_PATH
     #define MAX_PATH 4096
     #endif
+#endif /* !_WIN32 */
+
+/* ── macOS: HFS path → POSIX path ────────────────────────────────────────── */
+/*
+ * XPLMGetPluginInfo and XPLMGetNthAircraftModel return HFS-style paths on
+ * macOS (colon-separated, e.g. "Volume:dir:file"). fopen() and civetweb need
+ * POSIX paths. CoreFoundation converts reliably for both boot and non-boot
+ * volumes.
+ */
+#ifdef __APPLE__
+static void hfs_to_posix(const char *hfs, char *out, size_t out_size) {
+    CFStringRef s = CFStringCreateWithCString(NULL, hfs, kCFStringEncodingUTF8);
+    if (!s) { strncpy(out, hfs, out_size - 1); return; }
+    CFURLRef url = CFURLCreateWithFileSystemPath(NULL, s, kCFURLHFSPathStyle, false);
+    CFRelease(s);
+    if (!url) { strncpy(out, hfs, out_size - 1); return; }
+    CFStringRef p = CFURLCopyFileSystemPath(url, kCFURLPOSIXPathStyle);
+    CFRelease(url);
+    if (!p) { strncpy(out, hfs, out_size - 1); return; }
+    CFStringGetCString(p, out, (CFIndex)out_size, kCFStringEncodingUTF8);
+    CFRelease(p);
+}
 #endif
 
 #include <stdio.h>
@@ -557,6 +583,9 @@ static void ws_close(const struct mg_connection *conn, void *cbdata) {
 static int handle_acf(struct mg_connection *conn, void *cbdata) {
     char acf_file[MAX_PATH] = {0}, acf_path[MAX_PATH] = {0};
     XPLMGetNthAircraftModel(0, acf_file, acf_path);
+#ifdef __APPLE__
+    if (acf_path[0]) { char posix[MAX_PATH]; hfs_to_posix(acf_path, posix, sizeof(posix)); strncpy(acf_path, posix, MAX_PATH - 1); }
+#endif
     int num_cyls = 0;
     if (acf_path[0]) {
         FILE *f = fopen(acf_path, "r");
@@ -825,6 +854,9 @@ PLUGIN_API int XPluginStart(char *name, char *sig, char *desc) {
 
     char xpl_path[MAX_PATH];
     XPLMGetPluginInfo(XPLMGetMyID(), NULL, xpl_path, NULL, NULL);
+#ifdef __APPLE__
+    { char posix[MAX_PATH]; hfs_to_posix(xpl_path, posix, sizeof(posix)); strncpy(xpl_path, posix, MAX_PATH - 1); }
+#endif
     /* Strip  .../XPanelServer/<platform>/XPanelServer.xpl  →  .../XPanelServer */
     char *s = strrchr(xpl_path, '/');
 #ifdef _WIN32
