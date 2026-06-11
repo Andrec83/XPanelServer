@@ -7,3 +7,4 @@
 panels.json
 xplane-plugin/sdk
 xplane-plugin/build/
+*.local
