@@ -119,7 +119,7 @@ jobs:
         run: >
           cmake -B build
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          -DCMAKE_OSX_ARCHITECTURES=x86_64
+          "-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64"
 
       - name: Build
         working-directory: xplane-plugin

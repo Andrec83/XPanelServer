@@ -19,8 +19,7 @@ The **XPanelServer plugin** handles everything: static file serving, REST proxy,
 ## X-Plane setup
 
 1. Open X-Plane → **Settings → Network**
-2. Under **"Other Computers can send data to this computer"**, enable **"Accept incoming connections"**
-3. Leave the port at the default **8086**
+2. At the bottom of the page enable **"Accept incoming connections"**
 
 ---
 
