@@ -10,7 +10,7 @@
  *   /panels[/*]        → panel config CRUD  →  <plugin>/Resources/panels.json
  *   /acf               → ACF file probe
  *
- ~
+ *
  * The HTTP proxy and WebSocket hub use civetweb's own client API and work
  * on Windows, macOS, and Linux without any platform-specific code.
  */
