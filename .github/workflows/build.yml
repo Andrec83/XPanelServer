@@ -41,7 +41,7 @@ jobs:
             # First commit in repo — always build
             echo "c_changed=true" >> $GITHUB_OUTPUT
             echo "First commit — will compile"
-          elif git diff --quiet HEAD~1 HEAD -- xplane-plugin/src/ xplane-plugin/CMakeLists.txt; then
+          elif git diff --quiet HEAD~1 HEAD -- xplane-plugin/src/ xplane-plugin/CMakeLists.txt .github/workflows/build.yml; then
             echo "c_changed=false" >> $GITHUB_OUTPUT
             echo "No C/CMake changes — compilation skipped"
           else
@@ -52,7 +52,7 @@ jobs:
   # ── Windows x64 ──────────────────────────────────────────────────────────────
   build-windows:
     name: Windows x64
-    runs-on: windows-latest
+    runs-on: windows-2022
     needs: changes
     if: needs.changes.outputs.c_changed == 'true'
 
