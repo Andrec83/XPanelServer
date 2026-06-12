@@ -40,7 +40,7 @@ xplane-panel is a **zero-build web application** that renders live cockpit instr
 
 **Dataref value cache:** every `dataref_update_values` message is stored in memory (keyed by dataref ID). When a new browser sends its subscription, the plugin immediately replies with a full snapshot so all instruments populate at once — no waiting for slow-changing values to update naturally.
 
-This **avoids CORS issues** that would occur if the browser tried to talk directly to X-Plane on port 8086 from a remote device. On `localhost`, the frontend still bypasses the plugin and talks directly to X-Plane for lower latency (see `xplane-api.js`).
+This **avoids CORS issues** that would occur if the browser tried to talk directly to X-Plane on port 8086 from a remote device.
 
 ---
 
@@ -417,7 +417,7 @@ pip install aiohttp   # once
 python serve.py       # serves static + proxy on :8080
 ```
 
-Then open `http://localhost:8080` in a browser. The frontend auto-detects `localhost` and connects directly to X-Plane on port 8086.
+Then open `http://localhost:8080` in a browser. 
 
 ### Coding conventions
 
@@ -445,7 +445,7 @@ Then open `http://localhost:8080` in a browser. The frontend auto-detects `local
 
 ### Same PC (simplest)
 
-Open `http://localhost:8088` in a browser on the sim PC. `xplane-api.js` detects `localhost` and connects directly to X-Plane on port 8086, bypassing the plugin hub for lower latency.
+Open `http://localhost:8088` in a browser on the sim PC. 
 
 ### LAN devices (tablet, phone, Raspberry Pi)
 
