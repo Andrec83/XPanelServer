@@ -227,6 +227,7 @@ async function connectAndRun(panel, host) {
   } catch (err) {
     showOverlay(`Cannot reach X-Plane at ${host}:${location.port || 8088}\n${err.message}`)
     updateStatusDot(false)
+    api.disconnect()  // cancel auto-reconnect so only one retry path is active
     setTimeout(() => connectAndRun(panel, host), 5000)
   }
 }

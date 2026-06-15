@@ -143,6 +143,13 @@ export function subscribe(idFrequencyPairs, onUpdate, onError) {
 // ── internal ──────────────────────────────────────────────────────────────────
 
 function _openWS() {
+  // Close any existing socket without triggering the reconnect loop.
+  if (_ws) {
+    _ws.onclose = null
+    _ws.onerror = null
+    if (_ws.readyState !== WebSocket.CLOSED) _ws.close()
+    _ws = null
+  }
   return new Promise((resolve, reject) => {
     const url = _wsUrl()
     const ws = new WebSocket(url)
