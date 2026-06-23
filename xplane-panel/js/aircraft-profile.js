@@ -146,12 +146,11 @@ export async function probeAircraftProfile() {
     try { return await readDataref(meta.id) } catch { return undefined }
   }
 
-  const vals = {}
-  await Promise.all(
-    Object.entries(ALL_DREFS).map(async ([key, name]) => {
-      vals[key] = await read(name)
-    })
-  )
+  // X-Plane's REST server opens a new TCP connection per request and can crash
+  // on Mac if hit with too many simultaneous connections.  Run at most 6 at once.
+  const vals = await _serialPool(Object.entries(ALL_DREFS), 6,
+    async ([key, name]) => [key, await read(name)])
+    .then(pairs => Object.fromEntries(pairs))
 
   // ── Autopilot ──
   // Types 2-9 = preconfigured GA APs (S-Tec, KAP-140…) — no autothrottle.
@@ -368,6 +367,20 @@ function _tankLabels(n) {
   if (n === 3) return ['LEFT', 'CTR', 'RIGHT']
   if (n === 4) return ['L OUT', 'L IN', 'R IN', 'R OUT']
   return Array.from({ length: n }, (_, i) => `TK ${i + 1}`)
+}
+
+// Run at most `limit` async tasks concurrently and return results in input order.
+async function _serialPool(items, limit, fn) {
+  const results = new Array(items.length)
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++
+      results[i] = await fn(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
 }
 
 function _buildGearConfig({ gearType, gearX, gearZ }) {
