@@ -440,3 +440,20 @@ export class RadioPanel extends BaseInstrument {
     return Math.min(Math.max(6, fromW), maxH)
   }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'radio',
+  label:    'Radio Panel',
+  icon:     '📻',
+  order:    170,
+  datarefs: DEFAULTS,
+  options: [
+    { key: 'radios', label: 'Radios', type: 'multi', default: ['com1', 'com2', 'nav1', 'nav2'],
+      choices: [
+        { value: 'com1', label: 'COM 1' }, { value: 'com2', label: 'COM 2' },
+        { value: 'nav1', label: 'NAV 1' }, { value: 'nav2', label: 'NAV 2' },
+        { value: 'adf1', label: 'ADF 1' }, { value: 'adf2', label: 'ADF 2' },
+      ] },
+  ],
+}

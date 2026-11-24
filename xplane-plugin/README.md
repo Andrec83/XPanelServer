@@ -9,6 +9,7 @@ Serves the XPlane Network Panels web app **from inside X-Plane** so no separate 
 | `ws://<ip>:8088/ws` | WebSocket hub — one shared connection to X-Plane, broadcast to all browsers |
 | `http://<ip>:8088/panels` | Panel config CRUD (local `panels.json`) |
 | `http://<ip>:8088/acf` | Aircraft `.acf` file probe (cylinder count etc.) |
+| `http://<ip>:8088/instruments` | Lists the instrument modules under `Resources/web/js/instruments/` (sub-folders = palette sections) |
 
 Port default: **8088** — configurable via Plugins → XPanel Server → Port.
 
@@ -27,6 +28,8 @@ Browser 3 (laptop) ─┘
 **Dataref value cache** — every `dataref_update_values` message from X-Plane is stored in memory (keyed by dataref ID). When a new browser connects and sends its subscription, the plugin immediately replays the full cached snapshot so all instruments populate at once — no waiting for each slow-changing dataref to update naturally.
 
 **Subscription replay** — if X-Plane restarts mid-session, the hub reconnects automatically and replays every connected browser's last subscription message to X-Plane. Browsers stay connected and instruments resume from their last known values without any user action.
+
+**Main-thread rule** — the X-Plane SDK may only be called from X-Plane's main thread, while HTTP handlers and the hub run on civetweb's threads. Worker threads therefore never call the SDK: log lines are queued and written by a 0.5 s flight-loop callback, and the loaded aircraft path used by `/acf` is cached on the main thread. Follow the same pattern for new endpoints that need sim state.
 
 ---
 

@@ -200,3 +200,12 @@ function _border(ctx, x, y, w, h, r, stroke, fill) {
   if (fill)   { ctx.fillStyle   = fill;   ctx.fill()   }
   if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke() }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'fuel',
+  label:    'Fuel Tanks',
+  icon:     '⛽',
+  order:    180,
+  datarefs: DEFAULTS,
+}

@@ -213,3 +213,12 @@ export class AttitudeIndicator extends BaseInstrument {
     ctx.restore()
   }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'attitude',
+  label:    'Attitude',
+  icon:     '✈',
+  order:    30,
+  datarefs: DEFAULTS,
+}

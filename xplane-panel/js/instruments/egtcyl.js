@@ -186,3 +186,13 @@ export class EGTCylGauge extends BaseInstrument {
     }
   }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'egtcyl',
+  label:    'EGT / Cylinders',
+  icon:     '🌡',
+  order:    110,
+  datarefs: DEFAULTS,
+  select:   'engine',
+}

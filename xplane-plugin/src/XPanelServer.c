@@ -9,6 +9,7 @@
  *   /ws                → WebSocket hub  →  ws://127.0.0.1:8086/api/v3
  *   /panels[/*]        → panel config CRUD  →  <plugin>/Resources/panels.json
  *   /acf               → ACF file probe
+ *   /instruments       → list of instrument modules under web/js/instruments/
  *
  * The HTTP proxy and WebSocket hub use civetweb's own client API and work
  * on Windows, macOS, and Linux without any platform-specific code.
@@ -37,6 +38,7 @@
 #ifndef _WIN32
     #include <pthread.h>
     #include <unistd.h>
+    #include <dirent.h>
     #include <sys/stat.h>
     #include <ifaddrs.h>
     #include <arpa/inet.h>
@@ -87,6 +89,7 @@ static void hfs_to_posix(const char *hfs, char *out, size_t out_size) {
 #include "XPLMMenus.h"
 #include "XPLMUtilities.h"
 #include "XPLMPlanes.h"
+#include "XPLMProcessing.h"
 #include "XPWidgets.h"
 #include "XPStandardWidgets.h"
 
@@ -153,13 +156,95 @@ static WsHub g_hub;
 static cJSON      *g_dref_cache = NULL;
 static xp_mutex_t  g_cache_cs;
 
-/* ── Utility ──────────────────────────────────────────────────────────────── */
+/* ── Main-thread marshalling ──────────────────────────────────────────────── */
+/*
+ * The X-Plane SDK may only be called from X-Plane's main thread. civetweb
+ * request handlers and the WS hub run on their own threads, so:
+ *   - log_msg() from a worker thread queues the line; main_tick() (a flight
+ *     loop on the main thread) writes it to Log.txt.
+ *   - the loaded aircraft path is read on the main thread (enable, plane-loaded
+ *     message, main_tick) and cached for handle_acf().
+ */
+#ifdef _WIN32
+static DWORD     g_main_tid;
+#define is_main_thread() (GetCurrentThreadId() == g_main_tid)
+#else
+static pthread_t g_main_tid;
+#define is_main_thread() (pthread_equal(pthread_self(), g_main_tid))
+#endif
+
+#define LOG_QUEUE_MAX 128
+static char       g_log_q[LOG_QUEUE_MAX][512];
+static int        g_log_head = 0, g_log_count = 0, g_log_dropped = 0;
+static xp_mutex_t g_log_cs;
+
+static char       g_acf_file[MAX_PATH];
+static char       g_acf_path[MAX_PATH];
+static xp_mutex_t g_acf_cs;
+
+static void log_write(const char *line) {   /* main thread only */
+    XPLMDebugString("[XPanelServer] ");
+    XPLMDebugString(line);
+    XPLMDebugString("\n");
+}
+
+static void log_flush(void) {                /* main thread only */
+    for (;;) {
+        char line[512];
+        int dropped = 0;
+        xp_mutex_lock(&g_log_cs);
+        if (g_log_count == 0) {
+            dropped = g_log_dropped; g_log_dropped = 0;
+            xp_mutex_unlock(&g_log_cs);
+            if (dropped) {
+                snprintf(line, sizeof(line), "(%d log lines dropped)", dropped);
+                log_write(line);
+            }
+            return;
+        }
+        memcpy(line, g_log_q[g_log_head], sizeof(line));
+        g_log_head = (g_log_head + 1) % LOG_QUEUE_MAX;
+        g_log_count--;
+        xp_mutex_unlock(&g_log_cs);
+        log_write(line);
+    }
+}
+
 static void log_msg(const char *fmt, ...) {
     char buf[512];
     va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
-    XPLMDebugString("[XPanelServer] ");
-    XPLMDebugString(buf);
-    XPLMDebugString("\n");
+    if (is_main_thread()) {
+        log_flush();                         /* keep queued lines in order */
+        log_write(buf);
+        return;
+    }
+    xp_mutex_lock(&g_log_cs);
+    if (g_log_count < LOG_QUEUE_MAX) {
+        int tail = (g_log_head + g_log_count) % LOG_QUEUE_MAX;
+        memcpy(g_log_q[tail], buf, sizeof(buf));
+        g_log_count++;
+    } else {
+        g_log_dropped++;
+    }
+    xp_mutex_unlock(&g_log_cs);
+}
+
+static void acf_refresh(void) {              /* main thread only */
+    char file[MAX_PATH] = {0}, path[MAX_PATH] = {0};
+    XPLMGetNthAircraftModel(0, file, path);
+#ifdef __APPLE__
+    if (path[0]) { char posix[MAX_PATH]; hfs_to_posix(path, posix, sizeof(posix)); strncpy(path, posix, MAX_PATH - 1); }
+#endif
+    xp_mutex_lock(&g_acf_cs);
+    memcpy(g_acf_file, file, sizeof(g_acf_file));
+    memcpy(g_acf_path, path, sizeof(g_acf_path));
+    xp_mutex_unlock(&g_acf_cs);
+}
+
+static float main_tick(float since_call, float since_loop, int counter, void *ref) {
+    log_flush();
+    acf_refresh();
+    return 0.5f;                             /* seconds until next call */
 }
 
 /* ── Config ───────────────────────────────────────────────────────────────── */
@@ -581,11 +666,12 @@ static void ws_close(const struct mg_connection *conn, void *cbdata) {
 
 /* ── ACF file probe ───────────────────────────────────────────────────────── */
 static int handle_acf(struct mg_connection *conn, void *cbdata) {
-    char acf_file[MAX_PATH] = {0}, acf_path[MAX_PATH] = {0};
-    XPLMGetNthAircraftModel(0, acf_file, acf_path);
-#ifdef __APPLE__
-    if (acf_path[0]) { char posix[MAX_PATH]; hfs_to_posix(acf_path, posix, sizeof(posix)); strncpy(acf_path, posix, MAX_PATH - 1); }
-#endif
+    /* Worker thread: use the path cached on the main thread (see acf_refresh). */
+    char acf_file[MAX_PATH], acf_path[MAX_PATH];
+    xp_mutex_lock(&g_acf_cs);
+    memcpy(acf_file, g_acf_file, sizeof(acf_file));
+    memcpy(acf_path, g_acf_path, sizeof(acf_path));
+    xp_mutex_unlock(&g_acf_cs);
     int num_cyls = 0;
     if (acf_path[0]) {
         FILE *f = fopen(acf_path, "r");
@@ -612,6 +698,93 @@ static int handle_acf(struct mg_connection *conn, void *cbdata) {
     return 1;
 }
 
+/* ── Instrument discovery ─────────────────────────────────────────────────── */
+/*
+ * GET /instruments →
+ *   {"instruments":[{"path":"js/instruments/airspeed.js","section":""},
+ *                   {"path":"js/instruments/King Air 350/B350_EADI.js","section":"King Air 350"}, …]}
+ *
+ * Lists every .js file under <web>/js/instruments/ (up to INSTR_MAX_DEPTH folder levels).
+ * The first-level sub-folder becomes the palette section in the Panel Manager; files at the
+ * root have section "". Names starting with '.' or '_' are skipped. The browser imports each
+ * file and keeps those that export a META object (see js/instrument-registry.js), so dropping
+ * a new file in is all it takes to add an instrument.
+ */
+#define INSTR_MAX_DEPTH 3
+
+static void instr_scan(cJSON *arr, const char *rel, const char *section, int depth);
+
+static int instr_is_js(const char *n) {
+    size_t l = strlen(n);
+    return l > 3 && strcmp(n + l - 3, ".js") == 0;
+}
+
+static void instr_visit(cJSON *arr, const char *rel, const char *section, int depth,
+                        const char *name, int is_dir) {
+    if (name[0] == '.' || name[0] == '_') return;      /* also skips "." and ".." */
+    char child[MAX_PATH];
+    if (is_dir) {
+        if (depth + 1 >= INSTR_MAX_DEPTH) return;
+        snprintf(child, sizeof(child), "%s%s/", rel, name);
+        instr_scan(arr, child, depth == 0 ? name : section, depth + 1);
+    } else if (instr_is_js(name)) {
+        snprintf(child, sizeof(child), "js/instruments/%s%s", rel, name);
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "path", child);
+        cJSON_AddStringToObject(o, "section", section);
+        cJSON_AddItemToArray(arr, o);
+    }
+}
+
+/* rel: sub-path below js/instruments/ ending in '/', or "" for the root. */
+static void instr_scan(cJSON *arr, const char *rel, const char *section, int depth) {
+#ifdef _WIN32
+    char pattern[MAX_PATH];
+    wchar_t wpattern[MAX_PATH];
+    snprintf(pattern, sizeof(pattern), "%s/js/instruments/%s*", g_web_root, rel);
+    if (!MultiByteToWideChar(CP_UTF8, 0, pattern, -1, wpattern, MAX_PATH)) return;
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(wpattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        char name[MAX_PATH];
+        if (!WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, name, sizeof(name), NULL, NULL)) continue;
+        instr_visit(arr, rel, section, depth, name,
+                    (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+#else
+    char dir[MAX_PATH];
+    snprintf(dir, sizeof(dir), "%s/js/instruments/%s", g_web_root, rel);
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        char full[MAX_PATH];
+        struct stat st;
+        snprintf(full, sizeof(full), "%s/%s", dir, e->d_name);
+        if (stat(full, &st) != 0) continue;
+        instr_visit(arr, rel, section, depth, e->d_name, S_ISDIR(st.st_mode));
+    }
+    closedir(d);
+#endif
+}
+
+static int handle_instruments(struct mg_connection *conn, void *cbdata) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr  = cJSON_CreateArray();
+    cJSON_AddItemToObject(root, "instruments", arr);
+    instr_scan(arr, "", "", 0);
+    char *out = cJSON_PrintUnformatted(root);
+    mg_printf(conn,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Cache-Control: no-store\r\nContent-Length: %d\r\n\r\n%s",
+        (int)strlen(out), out);
+    free(out);
+    cJSON_Delete(root);
+    return 1;
+}
+
 /* ── HTTP server start / stop ─────────────────────────────────────────────── */
 static int server_start(void) {
     if (g_running) return 1;
@@ -628,6 +801,10 @@ static int server_start(void) {
         "enable_directory_listing", "no",
         "index_files",              "index.html",
         "tcp_nodelay",              "1",
+        /* Browsers must revalidate every file (cheap 304 via ETag) instead of using a
+           cached copy for an hour — otherwise updated or newly dropped-in instrument
+           files don't show up until the cache expires. */
+        "static_file_cache_control", "no-cache",
         NULL
     };
     struct mg_callbacks cbs = {0};
@@ -636,6 +813,7 @@ static int server_start(void) {
 
     mg_set_request_handler(g_ctx, "/api/",    handle_api,    NULL);
     mg_set_request_handler(g_ctx, "/acf",     handle_acf,    NULL);
+    mg_set_request_handler(g_ctx, "/instruments", handle_instruments, NULL);
     mg_set_request_handler(g_ctx, "/panels",  handle_panels, NULL);
     mg_set_request_handler(g_ctx, "/panels/", handle_panels, NULL);
     mg_set_websocket_handler(g_ctx, "/ws",
@@ -850,7 +1028,14 @@ PLUGIN_API int XPluginStart(char *name, char *sig, char *desc) {
     strncpy(sig,  "com.xpanelserver.plugin",  255);
     strncpy(desc, "Serves XPlane Network Panels web app on the LAN", 255);
 
+#ifdef _WIN32
+    g_main_tid = GetCurrentThreadId();
+#else
+    g_main_tid = pthread_self();
+#endif
     xp_mutex_init(&g_cs);
+    xp_mutex_init(&g_log_cs);
+    xp_mutex_init(&g_acf_cs);
 
     char xpl_path[MAX_PATH];
     XPLMGetPluginInfo(XPLMGetMyID(), NULL, xpl_path, NULL, NULL);
@@ -895,10 +1080,27 @@ PLUGIN_API void XPluginStop(void) {
 #ifdef _WIN32
     WSACleanup();
 #endif
+    log_msg("Plugin unloaded");              /* also flushes queued lines */
     xp_mutex_free(&g_cs);
-    log_msg("Plugin unloaded");
+    xp_mutex_free(&g_log_cs);
+    xp_mutex_free(&g_acf_cs);
 }
 
-PLUGIN_API int XPluginEnable(void)  { server_start(); menu_rebuild(); return 1; }
-PLUGIN_API void XPluginDisable(void) { server_stop();  menu_rebuild(); }
-PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from, int msg, void *param) {}
+PLUGIN_API int XPluginEnable(void) {
+    acf_refresh();
+    XPLMRegisterFlightLoopCallback(main_tick, 0.5f, NULL);
+    server_start();
+    menu_rebuild();
+    return 1;
+}
+
+PLUGIN_API void XPluginDisable(void) {
+    server_stop();                           /* worker threads are gone after this */
+    XPLMUnregisterFlightLoopCallback(main_tick, NULL);
+    log_flush();
+    menu_rebuild();
+}
+
+PLUGIN_API void XPluginReceiveMessage(XPLMPluginID from, int msg, void *param) {
+    if (msg == XPLM_MSG_PLANE_LOADED && (intptr_t)param == 0) acf_refresh();   /* user aircraft */
+}

@@ -171,3 +171,12 @@ export class FlapsIndicator extends BaseInstrument {
     ctx.restore()
   }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'flaps',
+  label:    'Flaps',
+  icon:     '⬇',
+  order:    70,
+  datarefs: DEFAULTS,
+}

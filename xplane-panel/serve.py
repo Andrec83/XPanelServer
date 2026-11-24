@@ -164,6 +164,24 @@ async def panels_delete(request):
     return web.json_response({"deleted": panel_id})
 
 
+# ── Instrument discovery (mirrors the plugin's GET /instruments) ──────────────
+
+INSTRUMENTS_DIR = STATIC_DIR / "js" / "instruments"
+INSTR_MAX_DEPTH = 3
+
+async def instruments_list(request):
+    """Every .js file under js/instruments/; the first-level sub-folder is the palette section."""
+    out = []
+    for path in sorted(INSTRUMENTS_DIR.rglob("*.js")):
+        rel = path.relative_to(INSTRUMENTS_DIR)
+        if len(rel.parts) > INSTR_MAX_DEPTH or any(p.startswith((".", "_")) for p in rel.parts):
+            continue
+        out.append({
+            "path": (Path("js/instruments") / rel).as_posix(),
+            "section": rel.parts[0] if len(rel.parts) > 1 else "",
+        })
+    return web.json_response({"instruments": out}, headers={"Cache-Control": "no-store"})
+
 # ── Static files ──────────────────────────────────────────────────────────────
 
 async def static_index(request: web.Request) -> web.FileResponse:
@@ -182,13 +200,16 @@ def make_app() -> web.Application:
     app.router.add_options("/api/{path:.*}", rest_options)
     app.router.add_route("*", "/api/{path:.*}", rest_proxy)
 
-    # Static files (index.html catchall + everything else)
-    app.router.add_get("/", static_index)
-    app.router.add_static("/", STATIC_DIR, show_index=False)
-
+    # API routes must be registered before the static catch-all below, which would
+    # otherwise answer every GET (aiohttp matches resources in registration order).
     app.router.add_get("/panels", panels_list)
     app.router.add_post("/panels", panels_save)
     app.router.add_delete("/panels/{id}", panels_delete)
+    app.router.add_get("/instruments", instruments_list)
+
+    # Static files (index.html catchall + everything else)
+    app.router.add_get("/", static_index)
+    app.router.add_static("/", STATIC_DIR, show_index=False)
 
     return app
 

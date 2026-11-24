@@ -35,12 +35,15 @@ xplane-panel is a **zero-build web application** that renders live cockpit instr
 | `/ws`     | WebSocket **hub** — one shared X-Plane connection, broadcast to all browsers     |
 | `/panels` | Panel configuration CRUD — persisted in plugin `Resources/panels.json`           |
 | `/acf`    | Aircraft `.acf` file probe — exposes data not available via datarefs (e.g. cylinder count) |
+| `/instruments` | Lists every `.js` file under `web/js/instruments/` with its section (first-level sub-folder) — drives instrument auto-discovery |
 
 **WebSocket hub model:** the plugin maintains one persistent WS connection to X-Plane (`ws://127.0.0.1:8086/api/v3`) and broadcasts every incoming message to all connected browsers. Each browser's subscription message is forwarded to X-Plane and stored; if X-Plane restarts, the hub reconnects and replays all stored subscriptions automatically.
 
 **Dataref value cache:** every `dataref_update_values` message is stored in memory (keyed by dataref ID). When a new browser sends its subscription, the plugin immediately replies with a full snapshot so all instruments populate at once — no waiting for slow-changing values to update naturally.
 
 This **avoids CORS issues** that would occur if the browser tried to talk directly to X-Plane on port 8086 from a remote device.
+
+**Threading:** the X-Plane SDK may only be called from X-Plane's main thread, but civetweb request handlers and the WS hub run on their own threads. The plugin therefore never calls the SDK from them: `log_msg()` from a worker thread queues the line, and a flight-loop callback (`main_tick`, every 0.5 s on the main thread) writes it to `Log.txt`; the loaded aircraft's path is read on the main thread (at enable, on `XPLM_MSG_PLANE_LOADED`, and in `main_tick`) and cached for the `/acf` handler. Keep this rule when adding endpoints — read SDK state on the main thread and hand it over under a mutex.
 
 ---
 
@@ -49,7 +52,6 @@ This **avoids CORS issues** that would occur if the browser tried to talk direct
 | Path                                      | Role                                                                                                |
 | ----------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `xplane-plugin/`                          | C plugin source — builds `XPanelServer.xpl` (civetweb + cJSON, Windows x64)                        |
-| `xplane-panel/README.md`                  | Quick-start guide                                                                                   |
 | `xplane-panel/index.html`                 | Panel Manager SPA: panel list, editor grid, settings (connection, dataref search)                   |
 | `xplane-panel/panel.html`                 | Live instrument display — opens one per panel, reads grid layout from panel data                    |
 | `xplane-panel/js/xplane-api.js`           | Single module that handles X-Plane WebSocket connection + REST API abstraction                      |
@@ -57,6 +59,9 @@ This **avoids CORS issues** that would occur if the browser tried to talk direct
 | `xplane-panel/js/panel-store.js`          | CRUD for panel configs — tries server (`/panels`), transparently falls back to `localStorage`       |
 | `xplane-panel/js/dataref-registry.js`     | Loads/parses/caches `DataRefs.txt` from the XPlane2Blender repo; provides search                    |
 | `xplane-panel/js/panel.js`                | `panel.html`'s entry point — instantiates instruments, manages WS subscription lifecycle            |
+| `xplane-panel/js/instrument-registry.js`  | Fetches `/instruments`, imports every listed module, builds the type → class/META map and palette sections used by both pages |
+| `xplane-panel/js/instruments/<Section>/`  | Aircraft-specific instrument packs; each sub-folder becomes a collapsible palette section (`King Air 350/`, `Pilatus PC-6/`, `Boeing 737/`, `Airbus A330/`) |
+| `xplane-panel/js/instruments/_glass.js`   | Shared helpers for the airliner glass displays: standard flight/engine/fuel dataref sets, attitude ball, speed/altitude tapes, dials, readouts, vertical scales, position-based fuel-tank identification (`fuelTanks()`), weight units. Not listed as an instrument (leading `_`) |
 | `xplane-panel/js/instruments/base.js`     | `BaseInstrument` class: canvas resize handling, render loop, shared drawing utilities, theme system, ambient overlay effects |
 | `xplane-panel/js/instruments/airspeed.js` | Airspeed indicator with colour-coded speed limits (`V<sub>S0</sub>`, `V<sub>FE</sub>`, `V<sub>NE</sub>`…)         |
 | `xplane-panel/js/instruments/altimeter.js`| Three-pointer altimeter with barometric pressure knob and Kollsman window                           |
@@ -71,11 +76,14 @@ This **avoids CORS issues** that would occur if the browser tried to talk direct
 | `xplane-panel/js/instruments/oil.js`      | Oil temperature + pressure combined split-circle gauge, **per-engine** (`config.engineIndex`); colour zones from aircraft limits arcs; digital readout boxes |
 | `xplane-panel/js/instruments/fuel.js`     | Fuel tank quantity gauge — vertical stack of horizontal bars, one per active tank; tank count and labels auto-detected from aircraft profile; green/amber/red fill with percentage readout; auto-ranging capacity |
 | `xplane-panel/js/instruments/transponder.js` | Transponder panel: 4-digit octal code (tap ▲/▼ per digit), mode selector, IDENT button               |
-| `xplane-panel/js/instruments/lights.js`   | Aircraft lighting panel: landing, taxi, nav, beacon, strobe, logo, wing, formation — auto-hides lights not present on the aircraft |
+| `xplane-panel/js/instruments/lights.js`   | Aircraft lighting panel: landing, taxi, nav, beacon, strobe, plus per-widget generic-light buttons (`LABEL=slot` → `generic_lights_switch`) for logo/wing/etc. — auto-hides lights not present on the aircraft |
 | `xplane-panel/js/instruments/autopilot.js`| Full autopilot control panel: AP master, FD, A/THR (hidden on GA aircraft), HDG/ALT/V/S/SPD knobs with hold-to-repeat, lighted mode buttons, mode annunciator |
 | `xplane-panel/js/instruments/radio.js`    | Radio management panel: COM1/2, NAV1/2, ADF1/2 with active/standby freq display, swap, MHz/kHz tuning (hold-to-repeat), per-radio RX audio toggle |
 | `xplane-panel/js/instruments/egtcyl.js`   | EGT per-cylinder bar chart — mirrors CHT layout but for EGT values; **per-engine** (`config.engineIndex`) |
 | `xplane-panel/js/instruments/obs.js`      | OBS / CDI instrument — HSI-style course deviation indicator; **per-NAV** (`config.navIndex`)         |
+| `xplane-panel/js/instruments/turnCoordinator.js` | Turn rate + slip ball                                                                       |
+| `xplane-panel/js/instruments/blank.js`    | Empty filler tile (type `blanc`) for spacing out layouts                                            |
+| `xplane-panel/js/instruments/fmsCdu.js`   | FMS CDU: X-Plane built-in FMS screen (`fms_cduN_text/style_line*`) + Airbus/Boeing keypad (`sim/FMS/*`, `sim/FMS2/*`) |
 | `xplane-panel/serve.py`                    | Legacy Python dev proxy (aiohttp) — superseded by the plugin for production; still useful for quick JS iteration without rebuilding |
 | `xplane-panel/manifest.json`              | Minimal home-screen manifest — provides app name and icons for Android "Add to Home Screen"; no service worker |
 | `xplane-panel/favicon.ico`                | Favicon                                                                                             |
@@ -92,12 +100,24 @@ A **single-page app** with three views controlled by a top nav:
 | View     | Description                                                                                     |
 | -------- | ----------------------------------------------------------------------------------------------- |
 | Home     | Lists all saved panels with Open / Edit / Delete buttons; nav bar shows live X-Plane connection status |
-| Editor   | Grid editor with a drag-and-drop palette of instrument types, column/row/background config; widget sidebar has inline dataref autocomplete |
+| Editor   | Grid editor with a collapsible, section-grouped palette of instrument types, column/row/background/touch-controls config; widget sidebar has inline dataref autocomplete, generated option fields and the dataref availability check |
 | Settings | X-Plane host configuration + connection test (also runs automatically on startup); DataRefs.txt loader + search |
 
 #### Engine-index modal
 
-Instruments that are **per-engine** (EGT, CHT, Oil) show a modal dialog the moment they are dropped onto the grid, asking which engine (ENG 1–4) to associate them. This prevents silent misconfiguration. The engine index is stored in `widget.config.engineIndex` and can also be changed in the sidebar after placement. The set of per-engine instrument types is defined in the `ENGINE_INDEX_TYPES` constant in `index.html`.
+Instruments that are **per-engine** (EGT, CHT, Oil) show a modal dialog the moment they are dropped onto the grid, asking which engine (ENG 1–4) to associate them. This prevents silent misconfiguration. The engine index is stored in `widget.config.engineIndex` and can also be changed in the sidebar after placement. An instrument opts in with `select: 'engine'` in its `META` (`select: 'nav'` gives the equivalent NAV 1/2 prompt, stored in `widget.config.navIndex`).
+
+#### Dataref availability check
+
+When X-Plane is reachable, the editor loads the full list of datarefs it publishes (`GET /api/v3/datarefs?limit=100000`, also used for autocomplete) and checks each instrument against it — `META.datarefs` merged with the widget's overrides, compared by exact name:
+
+| Where | Shown when the instrument is "broken" |
+|---|---|
+| Palette | red border + dot; hover message |
+| Grid tile | red tile with **!** badge; hover message listing the missing datarefs and `META.requires` |
+| Sidebar | summary box, and each missing dataref field outlined red ("Not found in X-Plane"); optional ones amber. Lists of more than 12 dataref fields are folded under "Show all N datarefs" and open automatically when one is missing |
+
+"Broken" means at least one required dataref is missing — or, with `datarefCheck: 'any'`, that none exists. Keys listed in `META.optionalDatarefs` never make it broken. The list is re-fetched when the page regains focus or becomes visible (throttled to once per 5 s), on **Recheck**, and when Settings → Test connection succeeds; editing an override re-checks that widget immediately. If X-Plane is unreachable nothing is marked, rather than everything. The logic is `drStatus()` / `drMessage()` in `index.html` and contains no per-instrument code.
 
 #### Panel data model
 
@@ -108,16 +128,18 @@ Instruments that are **per-engine** (EGT, CHT, Oil) show a modal dialog the mome
   columns:     number,     // grid columns
   rows:        number,     // grid rows
   background:  string,     // CSS colour (e.g. '#111')
+  showControls: boolean,   // panel-wide touch-button switch (default true)
   widgets: [
     {
       id:        string,   // UUID
-      type:      string,   // one of 12 instrument types
+      type:      string,   // META.type of an instrument file (e.g. 'airspeed', 'b350_eadi')
       col:       number,   // grid column (1-based)
       row:       number,   // grid row (1-based)
       colSpan:   number,   // default 1
       rowSpan:   number,   // default 1
       datarefs:  object,   // optional user overrides for default dataref names
-      config:    object,   // instrument-specific options (e.g. engineCount)
+      config:    object,   // instrument-specific options from META.options (e.g. engineCount, genericLights);
+                           // config.showControls: true/false overrides the panel switch
     }
   ]
 }
@@ -125,7 +147,7 @@ Instruments that are **per-engine** (EGT, CHT, Oil) show a modal dialog the mome
 
 Panels are persisted server-side by the plugin in `panels.json`. `panel-store.js` provides a unified API that transparently falls back to `localStorage` when the server is unreachable.
 
-Widgets map to instrument classes via the `INSTRUMENT_MAP` constant in `panel.js` and `index.html`.
+Widgets map to instrument classes by `type`, matched against the `META.type` of the modules discovered at runtime (see [Instrument discovery](#instrument-discovery)). A widget whose type no longer exists shows an "Unknown instrument" placeholder instead of breaking the panel.
 
 ### Live Panel Display (`panel.html`)
 
@@ -145,7 +167,11 @@ All instruments extend `BaseInstrument`:
 | `constructor(canvas, config, datarefs, resolvedIds)` | Store canvas + config; set up resize observer and `requestAnimationFrame` loop; initialise `_theme` and `_ambient` |
 | `update(state)`           | Called on every WS delta; reads values from flat state object, sets `_dirty = true`        |
 | `_render()`               | Called when dirty; draws the full instrument frame using Canvas2D                         |
-| `_drawAmbientOverlays()`  | Called automatically after every `_render()`; draws hypoxia and flood-light overlays on top |
+| `_drawAmbientOverlays()`  | Called automatically after every `_render()`; draws night-darkness and flood-light overlays |
+| `_renderEmissive()`       | Optional; drawn **after** the darkness overlay — for self-lit LED/LCD digits, annunciators, EFIS symbology that must stay readable at night |
+| `_drawHypoxiaOverlay()`   | Called last; hypoxia blackout covers everything, including emissive layers and buttons |
+| `setTouchButtons(buttons, opts)` | Declare on-screen buttons; the base class draws them, hit-tests taps, does hold-to-repeat, and hides/disables them when touch controls are off |
+| `controlsVisible` / `touchStripHeight` | Whether touch controls are on for this widget / pixel height of the button strip (0 when hidden) — for instruments that prefer to shrink rather than be overlaid |
 | `onPointerDown/Move/Up()` | For interactive instruments (heading bug, flaps, gear, transponder, altimeter baro)       |
 | `requiredDatarefs()`      | Returns the list of dataref names this instrument needs                                   |
 | `setAircraftProfile(profile)` | No-op default; instruments override to consume the aircraft profile                   |
@@ -278,7 +304,7 @@ connect(host)
   │     │   ├── 'dataref_update_values' → dispatch delta to all subscribers
   │     │   └── 'result' → resolve pending ACK
   │     └── onclose → schedule reconnect with exponential backoff (1s → 30s max)
-  └── fetchAllDatarefs() — GET /v3/datarefs?limit=10000, build name→id maps
+  └── fetchAllDatarefs() — GET /v3/datarefs?limit=100000, build name→id maps
 ```
 
 When connecting via the plugin hub, the browser sends its `dataref_subscribe_values` message after `fetchAllDatarefs` completes. The plugin detects this message, stores it for reconnect replay, and immediately replies with a full snapshot of all cached dataref values so instruments populate instantly.
@@ -287,7 +313,7 @@ When connecting via the plugin hub, the browser sends its `dataref_subscribe_val
 
 `subscribe(idFrequencyPairs, onUpdate, onError)` returns an `unsubscribe` function. Each subscriber gets an incrementing `req_id` assigned. On WebSocket reconnect, all active subscriptions are automatically re-sent.
 
-Writes (`writeDataref(id, value)`) use REST `PATCH /v3/datarefs/{id}/value`. Commands (`triggerCommand(name)`) use WebSocket `command_set_is_active` with `duration:0` for momentary activation (e.g. flaps up/down, gear toggle). Command IDs are lazily loaded from `/v3/commands` and cached.
+Writes (`writeDataref(id, value, index?)`) use REST `PATCH /v3/datarefs/{id}/value`; pass `index` to write a single element of an array dataref (`?index=N`, e.g. one slot of `generic_lights_switch`). Commands (`triggerCommand(name)`) use WebSocket `command_set_is_active` with `duration:0` for momentary activation (e.g. flaps up/down, gear toggle). Command IDs are lazily loaded from `/v3/commands` and cached.
 
 ---
 
@@ -308,11 +334,16 @@ Writes (`writeDataref(id, value)`) use REST `PATCH /v3/datarefs/{id}/value`. Com
 | `oil`         | `OilGauge`          | `oil_temperature_deg_C`, `oil_pressure_psi` — per-engine via `config.engineIndex` | No — zones from profile arcs |
 | `fuel`        | `FuelGauge`         | `fuel_quantity` (array)                                            | No — all tanks in one widget; tank list from `profile.fuelTanks` |
 | `transponder` | `Transponder`       | `transponder_code`, `transponder_mode`, `transponder_id`           | Digit ▲/▼ + MODE + IDENT  |
-| `lights`      | `LightsPanel`       | `sim/cockpit2/switches/*_on` per light type                        | ON/OFF toggle per light   |
+| `lights`      | `LightSwitches`     | `sim/cockpit2/switches/*_on` per light type + `generic_lights_switch` (array) | ON/OFF toggle per light; extra generic-light buttons from `config.genericLights` (`"LOGO=3, WING=5"`) |
 | `autopilot`   | `AutopilotPanel`    | AP on/off, HDG/ALT/V/S/SPD dials, mode statuses, FD, A/THR        | Knobs (hold-to-repeat), AP/FD/THR buttons, mode buttons |
 | `radio`       | `RadioPanel`        | COM1/2, NAV1/2, ADF1/2 active+standby freqs + audio selection      | Swap, MHz/kHz tune (hold-to-repeat), RX audio toggle   |
 | `egtcyl`      | `EGTCylGauge`       | `cylinder_EGT_deg_C` — per-engine via `config.engineIndex`          | No — vertical bar chart, one bar per cylinder; mirrors CHT layout |
-| `obs`         | `OBSIndicator`      | OBS course, CDI deflection, GS deflection, flag — per-NAV via `config.navIndex` | No — HSI-style course deviation indicator |
+| `obs`         | `OBSGauge`          | OBS course, CDI deflection, GS deflection, flag — per-NAV via `config.navIndex` | No — HSI-style course deviation indicator |
+| `turn_coordinator` | `TurnCoordinator` | turn rate, `slip_deg`                                           | No                        |
+| `blanc`       | `BlankInstrument`   | —                                                                  | No — filler tile          |
+| `fms_cdu`     | `FMSCDU`            | `fms_cduN_text_line0–15` (UTF-8) + `fms_cduN_style_line0–15` (colour/size/reverse/flash/underline bits), `fms_exec_light_*`, `acf_ICAO` | Full keypad via `sim/FMS/*` (CDU 1) or `sim/FMS2/*` (CDU 2); keypad hidden when touch controls are off |
+
+The aircraft packs (`b350_*`, `pc6_*`, `b738_*`, `a333_*`) are listed in the README.
 
 ---
 
@@ -431,13 +462,42 @@ Then open `http://localhost:8080` in a browser.
 
 ### Adding a new instrument
 
-1. Create `js/instruments/<name>.js` exporting a class extending `BaseInstrument` and a `DEFAULTS` object for dataref names.
-2. Implement `requiredDatarefs()`, `update(state)`, and `_render()`.
-3. **Use `this._theme.*` for all colours** — never hardcode hex strings. See the theme slot table above. Ambient overlays (hypoxia, flood) are applied automatically after `_render()` with no extra code.
-4. Register the instrument in both `index.html` (add to `ICONS`, `DATAREF_DEFAULTS`, and the palette markup) and `panel.js` (add to `INSTRUMENT_MAP` and `getDefaults()`).
-5. If interactive, implement `onPointerDown/Move/Up` or use canvas `pointerdown` listeners in `_setupControls()`.
-6. If it needs aircraft-specific configuration, override `setAircraftProfile(profile)` — the profile is automatically delivered at boot and on every aircraft change. No changes to `panel.js` are needed. The full profile shape is documented in `aircraft-profile.js`.
-7. If the instrument is **per-engine**, add its type key to `ENGINE_INDEX_TYPES` in `index.html`. This causes a modal to pop up on drop asking the user to select an engine, and exposes an "Engine" dropdown in the sidebar.
+Instruments are **self-describing and auto-discovered** — there is nothing to edit in `index.html` or `panel.js`.
+
+1. Create a `.js` file in `js/instruments/` (General section) or in a sub-folder such as `js/instruments/King Air 350/` (one palette section per sub-folder). Imports are relative, so from a sub-folder use `'../base.js'` and `'../../xplane-api.js'`.
+2. Export a class extending `BaseInstrument` and a `DEFAULTS` object (`{ key: datarefName }`). Implement `requiredDatarefs()`, `update(state)` and `_render()`.
+3. Export a `META` object at the bottom of the file:
+   ```js
+   export const META = {
+     type:     'b350_torque',        // unique, stored in saved panels — never rename once published
+     label:    'King Air Torque',    // palette label
+     icon:     '⚙',                  // palette icon
+     order:    70,                   // position within the section (optional)
+     datarefs: DEFAULTS,             // subscribed at boot + shown as overrides in the editor sidebar
+     select:   'engine',             // optional: ask ENG 1–4 ('engine') or NAV 1–2 ('nav') on drop
+     touchControls: true,            // optional: has on-screen controls that follow the touch switch (usually setTouchButtons(); custom keypads check this.controlsVisible)
+     requires: 'the King Air 350 add-on',  // optional: hint shown when its datarefs are missing
+     optionalDatarefs: ['dh_bug'],   // optional: keys that may be missing without breaking it
+     datarefCheck: 'any',            // optional: works if ANY dataref exists (alternative add-on sets)
+     options: [                      // optional: extra sidebar fields, saved in widget.config[key]
+       { key: 'maxTemp', label: 'Max temp', type: 'number', min: 0, step: 50 },
+       { key: 'mode',    label: 'Mode',     type: 'select', choices: [{ value: 'a', label: 'A' }, 'b'], default: 'a' },
+       { key: 'radios',  label: 'Radios',   type: 'multi',  choices: ['com1', 'com2'], default: ['com1'] },
+       { key: 'invert',  label: 'Invert',   type: 'checkbox' },
+       { key: 'slots',   label: 'Slots',    type: 'text', placeholder: 'LOGO=3', help: 'Shown under the field' },
+     ],
+   }
+   ```
+   Files without `META` (helpers, `base.js`) are imported but ignored. Files and folders whose names start with `.` or `_` are not listed at all.
+4. **Use `this._theme.*` for colours** on generic gauges. Aircraft-replica glass displays may hard-code their real colours, but should draw self-lit content in `_renderEmissive()` so it behaves correctly at night.
+5. For on-screen buttons call `this.setTouchButtons([...])` in the constructor and set `touchControls: true` in `META` — the panel-wide and per-widget switches then work automatically.
+6. If it needs aircraft-specific configuration, override `setAircraftProfile(profile)`.
+7. Reload the Panel Manager — the instrument appears in its section. If a file fails to import, the palette lists it together with the error.
+8. With X-Plane running, the Panel Manager checks every instrument's datarefs (defaults + the widget's overrides) against the list X-Plane publishes. An instrument whose required datarefs are missing is shown **red** in the palette and the grid, hovering it explains what is missing (plus `requires`), and the sidebar outlines the missing dataref fields in red (optional ones in amber). The check re-runs when the page regains focus, on **Recheck**, and when an override is edited — so a wrong or renamed dataref name shows up immediately, with no per-instrument code.
+
+### Instrument discovery
+
+`GET /instruments` (plugin: `handle_instruments()` in `XPanelServer.c`; dev server: `instruments_list()` in `serve.py`) returns every `.js` file under `js/instruments/` up to two folder levels deep, with `section` = first-level folder name (`""` for the root). `js/instrument-registry.js` imports them all in parallel, validates `META`, finds the instrument class (the default export, the single exported `BaseInstrument` subclass, or `META.component`), and returns `{ byType, sections, errors }`. Duplicate `type`s are reported and the first file wins (root before sections, then alphabetical).
 
 ---
 
@@ -464,6 +524,8 @@ Open `panel.html?id=<panelId>` in separate browser windows/tabs on any device �
 - **X-Plane version requirement:** 12.1.1+ (the Web API was introduced in this version).
 - **Plugin required for LAN:** The XPanelServer plugin must be built and installed in X-Plane. `serve.py` still works for local development but does not support the hub or cache features.
 - **No service worker:** There is no service worker. The app always loads fresh from the plugin server. Home-screen install (manifest + icons) works for icon/name only — it does not enable offline use.
+- **Stale add-on datarefs:** X-Plane keeps listing an aircraft's own datarefs (e.g. `laminar/A333/…`) after that aircraft is unloaded, even though they no longer exist. The Panel Manager's availability check can therefore show such an instrument as available until X-Plane is restarted.
+- **Aircraft-specific datarefs:** an instrument that reads add-on datarefs (`KA350/…`, `AirbusFBW/…`) only works while that aircraft is loaded; the Panel Manager shows it red otherwise. X-Plane 12 also has no dedicated logo/wing/formation light datarefs — those are aircraft-defined generic lights.
 - **Dataref resolution at boot only:** If a dataref is not found during initial panel load, the instrument won't request it — it won't appear later if dynamically created.
 - **X-Plane restart resilience:** The plugin hub reconnects automatically and replays browser subscriptions. Browsers stay connected and resume from cached values — no page reload needed.
 - **Single X-Plane instance:** The plugin forwards to `localhost:8086` and assumes one X-Plane instance on the same machine.
@@ -514,17 +576,11 @@ This pattern gives an authentic avionics appearance and makes state immediately 
 
 ---
 
-## Dataref Registration — Critical Pattern
+## Dataref Registration
 
-Every dataref that an instrument needs to **write** (not just read) must be registered in **three places**:
+An instrument's datarefs are declared **once**, in the `DEFAULTS` object that its `META.datarefs` points to. `panel.js` resolves and subscribes exactly that set (plus any per-widget overrides), and the editor sidebar shows the same keys as override fields.
 
-| Location | Purpose |
-|---|---|
-| `DEFAULTS` object in the instrument `.js` file | Maps short key → full dataref name; used by the instrument internally |
-| `getDefaults('type')` in `panel.js` | Tells the panel engine which datarefs to resolve to integer IDs at boot |
-| `DATAREF_DEFAULTS.type` in `index.html` | Tells the Panel Manager editor which datarefs to subscribe to for the live preview |
-
-**If a dataref is only in `DEFAULTS` but not in `getDefaults()` / `DATAREF_DEFAULTS`, its ID will resolve to `undefined` and all writes will silently do nothing.** This was the root cause of the RX audio toggle failing: the `audio_selection_com1/com2/nav1/nav2/adf1/adf2` datarefs were in `DEFAULTS` but missing from the other two locations.
+**Every dataref the instrument reads or writes must be in that map.** A name used only inside the class is never resolved to an ID, so reads return `undefined` and writes silently do nothing. (This was the root cause of an old RX-audio bug, back when the map had to be kept in sync in three places.)
 
 ---
 
@@ -536,6 +592,8 @@ X-Plane command names are **case-sensitive** and must match exactly. Common mist
 |---|---|
 | `sim/autopilot/hdg` | `sim/autopilot/heading` |
 | `sim/autopilot/nav` | `sim/autopilot/NAV` |
+| `sim/lights/navigation_lights_on` | `sim/lights/nav_lights_on` |
+| `sim/lights/logo_lights_on` (doesn't exist) | `sim/lights/generic_NN_light_tog` — slot is aircraft-specific; only slots 01–64 have commands |
 
 Use `searchCommands('pattern')` (exported from `xplane-api.js`) in the browser console to discover the exact names available in a session:
 
@@ -545,6 +603,8 @@ searchCommands('autopilot')   // returns sorted array of matching command names
 ```
 
 Commands are lazy-loaded from `/v3/commands` on first use and cached; `searchCommands` only works after the first command trigger.
+
+The same applies to dataref names — a wrong one simply never updates. The Panel Manager's [dataref availability check](#dataref-availability-check) catches these: a misspelt or renamed dataref turns the instrument red even on the right aircraft.
 
 ---
 

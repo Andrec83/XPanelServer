@@ -326,3 +326,16 @@ export class EngineGauge extends BaseInstrument {
     ctx.fillText(label, x + bw / 2, nameCY)
   }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'engine',
+  label:    'Engine',
+  icon:     '⚙',
+  order:    60,
+  datarefs: DEFAULTS,
+  options: [
+    { key: 'engineCount', label: 'Engines', type: 'select', default: '',
+      choices: [{ value: '', label: 'Auto' }, 1, 2, 3, 4] },
+  ],
+}

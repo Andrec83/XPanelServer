@@ -256,3 +256,13 @@ export class OilGauge extends BaseInstrument {
     ctx.restore()
   }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'oil',
+  label:    'Oil Temp + Press',
+  icon:     '🛢',
+  order:    130,
+  datarefs: DEFAULTS,
+  select:   'engine',
+}

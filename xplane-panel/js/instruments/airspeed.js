@@ -195,3 +195,12 @@ export class AirspeedIndicator extends BaseInstrument {
     ctx.restore()
   }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'airspeed',
+  label:    'Airspeed',
+  icon:     '⏱',
+  order:    10,
+  datarefs: DEFAULTS,
+}

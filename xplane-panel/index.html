@@ -130,7 +130,63 @@ nav button.active { border-color: #4af; color: #4af; background: #4af1; }
   user-select: none;
 }
 .palette-item:hover { border-color: #4af; color: #4af; }
-.palette-item .icon { font-size: 1rem; width: 1.2rem; text-align: center; }
+.palette-item .icon { font-size: 1rem; width: 1.2rem; text-align: center; flex-shrink: 0; }
+.palette-section { margin-bottom: .5rem; }
+.palette-section > summary {
+  list-style: none; cursor: pointer; user-select: none;
+  display: flex; align-items: center; gap: .4rem;
+  font-size: .72rem; color: #888; text-transform: uppercase; letter-spacing: .06em;
+  padding: .35rem .2rem; border-bottom: 1px solid #2a2a2a; margin-bottom: .4rem;
+}
+.palette-section > summary::-webkit-details-marker { display: none; }
+.palette-section > summary::before { content: '▸'; color: #555; transition: transform .15s; }
+.palette-section[open] > summary::before { transform: rotate(90deg); }
+.palette-section > summary:hover { color: #4af; }
+.palette-section .count { margin-left: auto; color: #555; }
+.palette-msg { font-size: .75rem; color: #666; margin: .25rem 0 .5rem; }
+.palette-msg.err { color: #f64; }
+.editor-topbar .toggle { display: flex; align-items: center; gap: .35rem; cursor: pointer; white-space: nowrap; }
+.field-row .check-row { display: flex; align-items: center; gap: .4rem; font-size: .8rem; color: #bbb; margin-bottom: .2rem; }
+.field-row .check-row input { width: auto; }
+.widget-tile.missing { background: #2a1a10; }
+.widget-tile.missing .wlabel { color: #f90; }
+
+/* ── dataref availability (checked against the live X-Plane dataref list) ── */
+.widget-tile.dr-broken { background: #3a1214; box-shadow: inset 0 0 0 2px #e33; }
+.widget-tile.dr-broken.selected { background: #4a1a20; box-shadow: inset 0 0 0 2px #f66; }
+.widget-tile.dr-broken .wlabel { color: #f88; }
+.widget-tile .wbadge {
+  position: absolute; top: 3px; left: 5px; font-size: .7rem; font-weight: 700;
+  color: #fff; background: #e33; border-radius: 8px; padding: 0 .35rem; line-height: 1.25rem;
+}
+.palette-item.dr-broken { border-color: #6a2226; color: #e99; }
+.palette-item.dr-broken::after { content: '●'; margin-left: auto; color: #e33; font-size: .7rem; }
+.palette-item.dr-broken:hover { border-color: #f66; color: #faa; }
+.field-row.dr-missing .dr-ac-wrap input { border-color: #e33; box-shadow: 0 0 0 1px #e33; }
+.field-row.dr-optional .dr-ac-wrap input { border-color: #c80; }
+.field-row .dr-note { font-size: .68rem; margin-top: .2rem; color: #f77; }
+details.dr-many > summary { cursor: pointer; font-size: .75rem; color: #888; margin-bottom: .5rem; user-select: none; }
+details.dr-many > summary:hover { color: #4af; }
+.field-row .opt-help { font-size: .68rem; margin-top: .25rem; color: #666; line-height: 1.35; }
+.field-row.dr-optional .dr-note { color: #ca6; }
+.dr-summary {
+  font-size: .75rem; line-height: 1.35; color: #fbb; background: #3a1214;
+  border: 1px solid #e33; border-radius: 4px; padding: .45rem .55rem; margin-bottom: .75rem;
+}
+.dr-summary b { color: #fff; }
+.dr-summary a { color: inherit; text-decoration: underline; white-space: nowrap; margin-left: .2rem; }
+.dr-summary a:hover { color: #fff; }
+.dr-summary.ok   { color: #8d8; background: #12301a; border-color: #2a6a3a; }
+.dr-summary.info { color: #999; background: #1a1a1a; border-color: #333; }
+#dr-tip {
+  position: fixed; z-index: 2000; display: none; pointer-events: none;
+  max-width: 340px; background: #1c0d0e; border: 1px solid #e33; border-radius: 5px;
+  padding: .5rem .65rem; font-size: .75rem; line-height: 1.4; color: #eee;
+  box-shadow: 0 6px 18px #000a;
+}
+#dr-tip b { color: #f88; }
+#dr-tip code { font-family: monospace; font-size: .7rem; color: #fcc; word-break: break-all; }
+#dr-tip .more { color: #888; }
 
 /* grid area */
 .editor-canvas {
@@ -304,68 +360,18 @@ nav button.active { border-color: #4af; color: #4af; background: #4af1; }
       </select>
       <label>BG</label>
       <input type="color" id="edit-bg" value="#111111" style="width:36px;height:28px;padding:2px;background:#111;border:1px solid #444;border-radius:4px;cursor:pointer;">
+      <label class="toggle" title="Show on-screen buttons on instruments that support them. Individual widgets can override this in the sidebar.">
+        <input type="checkbox" id="edit-controls" checked /> Touch controls
+      </label>
       <div class="spacer"></div>
       <button onclick="saveCurrentPanel()" style="background:#4af2;border:1px solid #4af;color:#4af;padding:.4rem .9rem;border-radius:4px;cursor:pointer;font-size:.85rem;">Save</button>
       <button onclick="showView('home')" style="padding:.4rem .9rem;background:#222;border:1px solid #444;color:#bbb;border-radius:4px;cursor:pointer;font-size:.85rem;">Back</button>
     </div>
 
-    <!-- left: palette -->
+    <!-- left: palette — built from js/instruments/ at runtime (see js/instrument-registry.js) -->
     <div class="palette">
       <h4>Instruments</h4>
-      <div class="palette-item" draggable="true" data-type="airspeed">
-        <span class="icon">⏱</span> Airspeed
-      </div>
-      <div class="palette-item" draggable="true" data-type="altimeter">
-        <span class="icon">↕</span> Altimeter
-      </div>
-      <div class="palette-item" draggable="true" data-type="attitude">
-        <span class="icon">✈</span> Attitude
-      </div>
-      <div class="palette-item" draggable="true" data-type="vsi">
-        <span class="icon">↕</span> VSI
-      </div>
-      <div class="palette-item" draggable="true" data-type="heading">
-        <span class="icon">🧭</span> Heading
-      </div>
-      <div class="palette-item" draggable="true" data-type="engine">
-        <span class="icon">⚙</span> Engine N1/N2
-      </div>
-      <div class="palette-item" draggable="true" data-type="flaps">
-        <span class="icon">⬇</span> Flaps
-      </div>
-      <div class="palette-item" draggable="true" data-type="gear">
-        <span class="icon">⬤</span> Gear
-      </div>
-      <div class="palette-item" draggable="true" data-type="egt">
-        <span class="icon">🌡</span> EGT + Fuel Flow
-      </div>
-      <div class="palette-item" draggable="true" data-type="cht">
-        <span class="icon">🔥</span> CHT / Cylinders
-      </div>
-      <div class="palette-item" draggable="true" data-type="egtcyl">
-        <span class="icon">🌡</span> EGT / Cylinders
-      </div>
-      <div class="palette-item" draggable="true" data-type="obs">
-        <span class="icon">🧭</span> OBS / CDI
-      </div>
-      <div class="palette-item" draggable="true" data-type="oil">
-        <span class="icon">🛢</span> Oil Temp + Press
-      </div>
-      <div class="palette-item" draggable="true" data-type="transponder">
-        <span class="icon">📡</span> Transponder
-      </div>
-      <div class="palette-item" draggable="true" data-type="lights">
-        <span class="icon">💡</span> Light Switches
-      </div>
-      <div class="palette-item" draggable="true" data-type="autopilot">
-        <span class="icon">🤖</span> Autopilot
-      </div>
-      <div class="palette-item" draggable="true" data-type="radio">
-        <span class="icon">📻</span> Radio Panel
-      </div>
-      <div class="palette-item" draggable="true" data-type="fuel">
-        <span class="icon">⛽</span> Fuel Tanks
-      </div>
+      <div id="palette-sections"><p class="palette-msg">Loading instruments…</p></div>
     </div>
 
     <!-- centre: grid -->
@@ -418,6 +424,7 @@ nav button.active { border-color: #4af; color: #4af; background: #4af1; }
 import * as api from './js/xplane-api.js'
 import * as registry from './js/dataref-registry.js'
 import { listPanels, getPanel, savePanel, deletePanel, createPanel } from './js/panel-store.js'
+import { loadInstruments } from './js/instrument-registry.js'
 
 // ── globals ──────────────────────────────────────────────────────────────────
 let _editingPanel = null   // panel object being edited
@@ -425,11 +432,147 @@ let _dragType = null       // instrument type being dragged from palette
 let _selectedWidgetId = null
 let _regReady = false      // community registry loaded
 let _xpDatarefs = []       // live datarefs from X-Plane [{name, is_writable}]
+let _instruments = null    // { byType, sections, errors } from instrument-registry.js
 
-const ENGINE_INDEX_TYPES = new Set(['egt', 'oil', 'cht', 'egtcyl'])
-const ENGINE_TYPE_NAMES  = { egt: 'EGT + Fuel Flow', oil: 'Oil Temp + Press', cht: 'CHT / Cylinders', egtcyl: 'EGT / Cylinders' }
-const NAV_INDEX_TYPES    = new Set(['obs'])
-const NAV_TYPE_NAMES     = { obs: 'OBS / CDI' }
+// Everything about an instrument type (label, icon, datarefs, options…) comes from the
+// META export of its file in js/instruments/ — nothing is registered in this page.
+const instr     = type => _instruments?.byType.get(type)
+const selectOf  = type => instr(type)?.meta.select     // 'engine' | 'nav' | undefined
+const labelOf   = type => instr(type)?.label || type
+
+// ── dataref availability ─────────────────────────────────────────────────────
+// Every instrument's datarefs (META.datarefs + the widget's overrides) are checked
+// against the list X-Plane publishes right now, so an instrument that needs a
+// particular aircraft/add-on shows red instead of silently drawing nothing.
+// Instruments tune the check through META (no per-instrument code here):
+//   requires:         'King Air 350 add-on'   human hint shown in the message
+//   optionalDatarefs: ['key', …]              may be missing without breaking it
+//   datarefCheck:     'any'                   works if at least one dataref exists
+let _liveNames = null        // Set of names X-Plane publishes; null = not checked / offline
+let _liveFetchedAt = 0
+
+function drStatus(type, overrides = {}) {
+  const meta = instr(type)?.meta
+  if (!meta || !_liveNames) return null
+  const optional = new Set(meta.optionalDatarefs || [])
+  const anyMode  = meta.datarefCheck === 'any'
+  const keys = {}              // key → 'ok' | 'missing' | 'optional'
+  const missing = []
+  let required = 0, requiredMissing = 0
+  for (const [key, name] of Object.entries({ ...(meta.datarefs || {}), ...overrides })) {
+    const opt = optional.has(key)
+    if (!opt) required++
+    if (name && _liveNames.has(name)) { keys[key] = 'ok'; continue }
+    keys[key] = (opt || anyMode) ? 'optional' : 'missing'
+    missing.push({ key, name, optional: opt })
+    if (!opt) requiredMissing++
+  }
+  const broken = anyMode ? (required > 0 && requiredMissing === required) : requiredMissing > 0
+  return { broken, keys, missing, required, requiredMissing, anyMode, requires: meta.requires }
+}
+
+// compact = sidebar version: the missing fields are outlined right below, so no list
+function drMessage(st, label, compact = false) {
+  if (!st?.broken) return ''
+  const req = st.missing.filter(m => !m.optional)
+  let html = st.anyMode
+    ? `<b>${esc(label)}: no data</b> — none of its ${st.required} datarefs exist in X-Plane right now.`
+    : compact
+    ? `<b>Won't work</b> — ${req.length} of ${st.required} datarefs not found in X-Plane (outlined in red below).`
+    : `<b>${esc(label)}: won't work</b> — ${req.length} of ${st.required} datarefs not found in X-Plane:<br>` +
+      req.slice(0, 8).map(m => `<code>${esc(m.name)}</code>`).join('<br>') +
+      (req.length > 8 ? `<br><span class="more">…and ${req.length - 8} more</span>` : '')
+  html += st.requires
+    ? `<br><br>Needs: ${esc(st.requires)}`
+    : '<br><br>Probably needs a specific aircraft or add-on, or the dataref was renamed — point the fields marked red to existing datarefs.'
+  return html
+}
+
+async function refreshLiveDatarefs(force = false) {
+  if (!force && Date.now() - _liveFetchedAt < 5000) return
+  _liveFetchedAt = Date.now()
+  try {
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), 8000)
+    const res = await fetch('/api/v3/datarefs?limit=100000', { signal: ctrl.signal })
+    clearTimeout(t)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = (await res.json()).data || []
+    _xpDatarefs = data
+    _liveNames  = new Set(data.map(d => d.name))
+  } catch {
+    _liveNames = null          // offline → nothing is marked, rather than everything
+  }
+  _applyDrStatus()
+}
+
+const _selectedWidget = () => _editingPanel?.widgets.find(w => w.id === _selectedWidgetId)
+
+function _applyDrStatus() {
+  document.querySelectorAll('#palette-sections .palette-item').forEach(el => {
+    const broken = !!drStatus(el.dataset.type)?.broken
+    el.classList.toggle('dr-broken', broken)
+    el.title = broken ? '' : (el.dataset.path || '')
+  })
+  if (_editingPanel && document.getElementById('view-editor')?.classList.contains('active')) renderGrid()
+  const w = _selectedWidget()
+  if (w) _markDrInputs(w)
+}
+
+// Sidebar: summary box + red/amber outline on each dataref field
+function _markDrInputs(widget) {
+  const st  = drStatus(widget.type, widget.datarefs)
+  const sum = document.getElementById('dr-summary')
+  if (sum) {
+    const recheck = ' <a href="#" data-recheck>Recheck</a>'
+    if (!instr(widget.type))   { sum.style.display = 'none' }
+    else if (!st)              { sum.className = 'dr-summary info'; sum.innerHTML = 'X-Plane not reachable — datarefs not checked.' + recheck }
+    else if (st.broken)        { sum.className = 'dr-summary';      sum.innerHTML = drMessage(st, labelOf(widget.type), true) + recheck }
+    else if (st.missing.length){ sum.className = 'dr-summary info'; sum.innerHTML = `Works — ${st.missing.length} optional dataref(s) not found.` + recheck }
+    else                       { sum.className = 'dr-summary ok';   sum.innerHTML = `All ${st.required} datarefs found in X-Plane.` + recheck }
+  }
+  document.querySelectorAll('#dr-fields .field-row[data-dr-key]').forEach(row => {
+    const s = st?.keys[row.dataset.drKey]
+    row.classList.toggle('dr-missing',  s === 'missing')
+    row.classList.toggle('dr-optional', s === 'optional')
+    const text = s === 'missing' ? 'Not found in X-Plane' : s === 'optional' ? 'Not found (optional)' : ''
+    let note = row.querySelector('.dr-note')
+    if (!text) { note?.remove(); return }
+    if (!note) { note = document.createElement('div'); note.className = 'dr-note'; row.appendChild(note) }
+    note.textContent = text
+  })
+  const many = document.querySelector('#dr-fields details.dr-many')
+  if (many && document.querySelector('#dr-fields .dr-missing')) many.open = true
+}
+
+// Floating hover message (fixed-position so the scrolling grid can't clip it)
+const _tip = document.createElement('div')
+_tip.id = 'dr-tip'
+document.body.appendChild(_tip)
+function _moveTip(e) {
+  const pad = 14, r = _tip.getBoundingClientRect()
+  let x = e.clientX + pad, y = e.clientY + pad
+  if (x + r.width  > innerWidth  - 8) x = Math.max(8, e.clientX - r.width - pad)
+  if (y + r.height > innerHeight - 8) y = Math.max(8, e.clientY - r.height - pad)
+  _tip.style.left = x + 'px'; _tip.style.top = y + 'px'
+}
+function _attachTip(el, htmlFn) {
+  el.addEventListener('mouseenter', e => {
+    const html = htmlFn()
+    if (!html) return
+    _tip.innerHTML = html; _tip.style.display = 'block'; _moveTip(e)
+  })
+  el.addEventListener('mousemove', e => { if (_tip.style.display === 'block') _moveTip(e) })
+  el.addEventListener('mouseleave', () => { _tip.style.display = 'none' })
+}
+
+window.addEventListener('focus', () => refreshLiveDatarefs())      // aircraft may have changed
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshLiveDatarefs() })
+document.getElementById('sidebar-right').addEventListener('click', e => {
+  if (!e.target.closest('[data-recheck]')) return
+  e.preventDefault()
+  refreshLiveDatarefs(true)
+})
 
 window.showView = showView
 window.newPanel = newPanel
@@ -482,6 +625,7 @@ async function editPanel(id) {
   document.getElementById('edit-cols').value = String(_editingPanel.columns)
   document.getElementById('edit-rows').value = String(_editingPanel.rows)
   document.getElementById('edit-bg').value = _editingPanel.background || '#111111'
+  document.getElementById('edit-controls').checked = _editingPanel.showControls !== false
   _selectedWidgetId = null
   showView('editor')
   renderGrid()
@@ -505,6 +649,7 @@ async function saveCurrentPanel() {
   _editingPanel.columns    = parseInt(document.getElementById('edit-cols').value, 10)
   _editingPanel.rows       = parseInt(document.getElementById('edit-rows').value, 10)
   _editingPanel.background = document.getElementById('edit-bg').value
+  _editingPanel.showControls = document.getElementById('edit-controls').checked
   await savePanel(_editingPanel)
   showView('home')
 }
@@ -532,6 +677,7 @@ function renderGrid() {
   preview.style.gridTemplateColumns = `repeat(${columns}, 1fr)`
   preview.style.gridTemplateRows    = `repeat(${rows}, ${CELL_H}px)`
   preview.innerHTML = ''
+  _tip.style.display = 'none'           // the hovered tile is about to be replaced
 
   const occupied = new Map() // "col,row" → widgetId
   for (const w of widgets) {
@@ -561,11 +707,17 @@ function renderGrid() {
         if (widget.colSpan > 1) cell.style.gridColumnEnd = `span ${widget.colSpan}`
         if (widget.rowSpan > 1) cell.style.gridRowEnd    = `span ${widget.rowSpan}`
         const tile = document.createElement('div')
-        tile.className = 'widget-tile' + (widget.id === _selectedWidgetId ? ' selected' : '')
+        const known = !!instr(widget.type)
+        const broken = known && !!drStatus(widget.type, widget.datarefs)?.broken
+        tile.className = 'widget-tile' + (widget.id === _selectedWidgetId ? ' selected' : '') +
+                         (known ? '' : ' missing') + (broken ? ' dr-broken' : '')
+        tile.title = known ? '' : `No instrument file defines type "${widget.type}"`
         tile.innerHTML = `
-          <span class="wicon">${ICONS[widget.type] || '?'}</span>
-          <span class="wlabel">${widget.type}</span>
+          ${broken ? '<span class="wbadge">!</span>' : ''}
+          <span class="wicon">${esc(known ? instr(widget.type).icon : '?')}</span>
+          <span class="wlabel">${esc(labelOf(widget.type))}</span>
           <button class="wremove" title="Remove">×</button>`
+        if (known) _attachTip(tile, () => drMessage(drStatus(widget.type, widget.datarefs), labelOf(widget.type)))
         tile.querySelector('.wremove').addEventListener('click', e => {
           e.stopPropagation()
           _editingPanel.widgets = _editingPanel.widgets.filter(w => w.id !== widget.id)
@@ -599,9 +751,10 @@ function renderGrid() {
 
 
 function _addWidget(type, col, row) {
-  if (ENGINE_INDEX_TYPES.has(type)) {
+  if (!instr(type)) return
+  if (selectOf(type) === 'engine') {
     _showEngineModal(type, col, row)
-  } else if (NAV_INDEX_TYPES.has(type)) {
+  } else if (selectOf(type) === 'nav') {
     _showNavModal(type, col, row)
   } else {
     _createWidget(type, col, row, {})
@@ -617,7 +770,7 @@ function _createWidget(type, col, row, config) {
 function _showNavModal(type, col, row) {
   const modal  = document.getElementById('eng-modal')
   const btnsEl = document.getElementById('eng-modal-btns')
-  document.getElementById('eng-modal-title').textContent = `Select NAV Radio — ${NAV_TYPE_NAMES[type] || type}`
+  document.getElementById('eng-modal-title').textContent = `Select NAV Radio — ${labelOf(type)}`
   document.getElementById('eng-modal-msg').textContent   = 'Which NAV radio should this instrument use?'
   btnsEl.innerHTML = [1, 2].map(n =>
     `<button class="eng-btn" data-idx="${n - 1}">NAV ${n}</button>`
@@ -635,7 +788,7 @@ function _showNavModal(type, col, row) {
 function _showEngineModal(type, col, row) {
   const modal   = document.getElementById('eng-modal')
   const btnsEl  = document.getElementById('eng-modal-btns')
-  const name    = ENGINE_TYPE_NAMES[type] || type
+  const name    = labelOf(type)
   document.getElementById('eng-modal-title').textContent = `Select Engine — ${name}`
   document.getElementById('eng-modal-msg').textContent   = 'Which engine should this instrument monitor?'
 
@@ -654,14 +807,53 @@ function _showEngineModal(type, col, row) {
   modal.classList.add('visible')
 }
 
-// palette drag
-document.querySelectorAll('.palette-item').forEach(item => {
-  item.addEventListener('dragstart', e => {
-    _dragType = item.dataset.type
-    e.dataTransfer.setData('text/plain', _dragType)
-    e.dataTransfer.effectAllowed = 'copy'
+// ── palette (one collapsible section per sub-folder of js/instruments/) ───────
+const PALETTE_STATE_KEY = 'palette_sections_closed'
+
+function _closedSections() {
+  try { return new Set(JSON.parse(localStorage.getItem(PALETTE_STATE_KEY) || '[]')) } catch { return new Set() }
+}
+
+async function initPalette() {
+  const root = document.getElementById('palette-sections')
+  try {
+    _instruments = await loadInstruments()
+  } catch (err) {
+    root.innerHTML = `<p class="palette-msg err">${esc(err.message)}</p>`
+    return
+  }
+  const closed = _closedSections()
+  root.innerHTML = _instruments.sections.map(sec => `
+    <details class="palette-section" data-section="${esc(sec.name)}" ${closed.has(sec.name) ? '' : 'open'}>
+      <summary>${esc(sec.name)}<span class="count">${sec.items.length}</span></summary>
+      ${sec.items.map(it => `
+        <div class="palette-item" draggable="true" data-type="${esc(it.type)}" data-path="${esc(it.path)}" title="${esc(it.path)}">
+          <span class="icon">${esc(it.icon)}</span> ${esc(it.label)}
+        </div>`).join('')}
+    </details>`).join('')
+    + (_instruments.errors.length
+      ? `<p class="palette-msg err">${_instruments.errors.length} instrument file(s) failed to load:<br>` +
+        _instruments.errors.map(e => `${esc(e.path)} — ${esc(e.message)}`).join('<br>') + '</p>'
+      : '')
+
+  root.querySelectorAll('.palette-item').forEach(item => {
+    item.addEventListener('dragstart', e => {
+      _dragType = item.dataset.type
+      e.dataTransfer.setData('text/plain', _dragType)
+      e.dataTransfer.effectAllowed = 'copy'
+      _tip.style.display = 'none'
+    })
+    _attachTip(item, () => drMessage(drStatus(item.dataset.type), labelOf(item.dataset.type)))
   })
-})
+  root.querySelectorAll('details.palette-section').forEach(d => {
+    d.addEventListener('toggle', () => {
+      const set = _closedSections()
+      d.open ? set.delete(d.dataset.section) : set.add(d.dataset.section)
+      try { localStorage.setItem(PALETTE_STATE_KEY, JSON.stringify([...set])) } catch {}
+    })
+  })
+  _applyDrStatus()                  // red marks + refresh labels/icons if the editor was already open
+}
 
 // ── sidebar ──────────────────────────────────────────────────────────────────
 function renderSidebar(widget) {
@@ -670,50 +862,26 @@ function renderSidebar(widget) {
     sb.innerHTML = '<h4>Widget Config</h4><p class="empty-msg">Click a widget to configure it.</p>'
     return
   }
-  let extraConfig = ''
-  if (widget.type === 'engine') {
-    extraConfig = `<div class="field-row">
-      <label>Engines</label>
-      <select data-cfg="engineCount">
-        ${[1,2,3,4].map(n => `<option value="${n}"${(widget.config.engineCount||2)==n?' selected':''}>${n}</option>`).join('')}
-      </select>
-    </div>`
-  }
-  if (ENGINE_INDEX_TYPES.has(widget.type)) {
-    extraConfig = `<div class="field-row">
-      <label>Engine</label>
-      <select data-cfg="engineIndex">
-        ${[0,1,2,3].map(n => `<option value="${n}"${(widget.config.engineIndex??0)==n?' selected':''}>ENG ${n+1}</option>`).join('')}
-      </select>
-    </div>`
-  }
-  if (NAV_INDEX_TYPES.has(widget.type)) {
-    extraConfig = `<div class="field-row">
-      <label>NAV Radio</label>
-      <select data-cfg="navIndex">
-        ${[0,1].map(n => `<option value="${n}"${(widget.config.navIndex??0)==n?' selected':''}>NAV ${n+1}</option>`).join('')}
-      </select>
-    </div>`
-  }
-  if (widget.type === 'radio') {
-    const active = Array.isArray(widget.config.radios)
-      ? widget.config.radios
-      : ['com1','com2','nav1','nav2']
-    const radioOpts = [
-      { id:'com1', label:'COM 1' }, { id:'com2', label:'COM 2' },
-      { id:'nav1', label:'NAV 1' }, { id:'nav2', label:'NAV 2' },
-      { id:'adf1', label:'ADF 1' }, { id:'adf2', label:'ADF 2' },
-    ]
-    extraConfig = radioOpts.map(r => `
-      <div class="field-row">
-        <label>${r.label}</label>
-        <input type="checkbox" data-radio-id="${r.id}" ${active.includes(r.id) ? 'checked' : ''} />
-      </div>`).join('')
-  }
+  const entry = instr(widget.type)
+  const meta  = entry?.meta || { datarefs: {}, options: [] }
+  widget.config ||= {}
+  widget.datarefs ||= {}
+
+  // Options: built-in engine/NAV selector, touch-control override, then META.options
+  const opts = []
+  if (meta.select === 'engine') opts.push({ key: 'engineIndex', label: 'Engine', type: 'select', default: 0,
+    choices: [0, 1, 2, 3].map(n => ({ value: n, label: `ENG ${n + 1}` })) })
+  if (meta.select === 'nav') opts.push({ key: 'navIndex', label: 'NAV Radio', type: 'select', default: 0,
+    choices: [0, 1].map(n => ({ value: n, label: `NAV ${n + 1}` })) })
+  if (meta.touchControls) opts.push({ key: 'showControls', label: 'Touch controls', type: 'select', default: '',
+    choices: [{ value: '', label: 'Panel default' }, { value: true, label: 'Show' }, { value: false, label: 'Hide' }] })
+  opts.push(...(meta.options || []))
+  const extraConfig = opts.map((o, i) => _optionField(o, i, widget.config)).join('')
 
   sb.innerHTML = `
     <h4>Widget Config</h4>
-    <div class="field-row"><label>Type</label><span style="font-size:.82rem;color:#aaa;">${widget.type}</span></div>
+    <div class="field-row"><label>Type</label><span style="font-size:.82rem;color:#aaa;">${esc(labelOf(widget.type))}</span>
+      <div style="font-size:.7rem;color:#555;font-family:monospace;">${esc(widget.type)}${entry ? ' · ' + esc(entry.section) : ' · not found'}</div></div>
     <div class="field-row">
       <label>Col Span</label>
       <input type="number" min="1" max="${_editingPanel.columns}" data-cfg="colSpan" value="${widget.colSpan||1}" />
@@ -723,34 +891,77 @@ function renderSidebar(widget) {
       <input type="number" min="1" max="${_editingPanel.rows}" data-cfg="rowSpan" value="${widget.rowSpan||1}" />
     </div>
     <h4 style="margin-top:.75rem;">DataRef Overrides</h4>
+    <div id="dr-summary" class="dr-summary info"></div>
     <div id="dr-fields"></div>
     ${extraConfig ? '<h4 style="margin-top:.75rem;">Options</h4>' + extraConfig : ''}
   `
 
-  const drContainer = document.getElementById('dr-fields')
-  const defaults = DATAREF_DEFAULTS[widget.type] || {}
-  for (const [key, def] of Object.entries(defaults))
+  let drContainer = document.getElementById('dr-fields')
+  const drEntries = Object.entries(meta.datarefs || {})
+  if (drEntries.length > 12) {        // long lists (e.g. FMS CDU) fold away; opened when one is missing
+    const det = document.createElement('details')
+    det.className = 'dr-many'
+    det.innerHTML = `<summary>Show all ${drEntries.length} datarefs</summary>`
+    drContainer.appendChild(det)
+    drContainer = det
+  }
+  for (const [key, def] of drEntries)
     drContainer.appendChild(_createDrInput(key, widget, def))
+  _markDrInputs(widget)
 
-  sb.querySelectorAll('input[data-cfg], select[data-cfg]').forEach(inp => {
+  sb.querySelectorAll('input[data-cfg]').forEach(inp => {
     inp.addEventListener('change', () => {
-      const key = inp.dataset.cfg
-      const val = (inp.type === 'number' || key === 'engineIndex' || key === 'navIndex') ? parseInt(inp.value, 10) : inp.value
-      if (key === 'colSpan' || key === 'rowSpan') {
-        widget[key] = val
-        renderGrid()
+      widget[inp.dataset.cfg] = parseInt(inp.value, 10) || 1
+      renderGrid()
+    })
+  })
+  sb.querySelectorAll('[data-opt]').forEach(el => {
+    el.addEventListener('change', () => {
+      const o = opts[parseInt(el.dataset.opt, 10)]
+      let val
+      if (o.type === 'multi') {
+        val = [...sb.querySelectorAll(`[data-opt="${el.dataset.opt}"]:checked`)].map(c => o._values[parseInt(c.dataset.choice, 10)])
+      } else if (o.type === 'checkbox') {
+        val = el.checked
+      } else if (o.type === 'number') {
+        val = el.value === '' ? '' : Number(el.value)
+      } else if (o.type === 'select') {
+        val = o._values[el.selectedIndex]
       } else {
-        widget.config[key] = val
+        val = el.value
       }
+      if (val === '' || val === undefined) delete widget.config[o.key]
+      else widget.config[o.key] = val
     })
   })
-  sb.querySelectorAll('input[data-radio-id]').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const checked = [...sb.querySelectorAll('input[data-radio-id]:checked')]
-        .map(el => el.dataset.radioId)
-      widget.config.radios = checked
-    })
-  })
+}
+
+// Renders one sidebar option from a META.options entry:
+//   { key, label, type: 'select' | 'multi' | 'checkbox' | 'number' | 'text', default, choices, min, max, step,
+//     placeholder, help }   // help = small explanatory text under the field
+// choices: [value, …] or [{ value, label }, …]. Selecting a choice whose value is '' removes the key.
+function _optionField(o, idx, config) {
+  const choices = (o.choices || []).map(c => (c !== null && typeof c === 'object') ? c : { value: c, label: String(c) })
+  o._values = choices.map(c => c.value)
+  const cur = config[o.key] ?? o.default
+  const label = `<label>${esc(o.label || o.key)}</label>`
+  const help  = o.help ? `<div class="opt-help">${esc(o.help)}</div>` : ''
+  if (o.type === 'select') {
+    return `<div class="field-row">${label}<select data-opt="${idx}">
+      ${choices.map(c => `<option${String(c.value) === String(cur ?? '') ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}
+    </select>${help}</div>`
+  }
+  if (o.type === 'multi') {
+    const active = Array.isArray(cur) ? cur.map(String) : []
+    return `<div class="field-row">${label}${choices.map((c, ci) => `
+      <label class="check-row"><input type="checkbox" data-opt="${idx}" data-choice="${ci}" ${active.includes(String(c.value)) ? 'checked' : ''}/> ${esc(c.label)}</label>`).join('')}${help}</div>`
+  }
+  if (o.type === 'checkbox') {
+    return `<div class="field-row"><label class="check-row"><input type="checkbox" data-opt="${idx}" ${cur ? 'checked' : ''}/> ${esc(o.label || o.key)}</label>${help}</div>`
+  }
+  const attrs = o.type === 'number' ? ['min', 'max', 'step'].filter(a => o[a] != null).map(a => `${a}="${o[a]}"`).join(' ') : ''
+  const ph    = o.placeholder != null ? ` placeholder="${esc(o.placeholder)}"` : ''
+  return `<div class="field-row">${label}<input type="${o.type === 'number' ? 'number' : 'text'}" data-opt="${idx}" ${attrs}${ph} value="${esc(cur ?? '')}" />${help}</div>`
 }
 
 // ── settings ──────────────────────────────────────────────────────────────────
@@ -782,9 +993,11 @@ async function testConnection(silent = false) {
     el.textContent = `Connected to X-Plane ${ver}`
     badge.className = 'ok'; badge.textContent = `X-Plane ${ver}`
 
-    /* Also prime the live dataref list if not already done */
-    if (_xpDatarefs.length === 0) {
-      fetch(`${base}/api/v3/datarefs?limit=10000`)
+    /* Also refresh the live dataref list (autocomplete + availability marks) */
+    if (base === '') {
+      refreshLiveDatarefs()
+    } else if (_xpDatarefs.length === 0) {
+      fetch(`${base}/api/v3/datarefs?limit=100000`)
         .then(r => r.ok ? r.json() : null)
         .then(j => { if (j) _xpDatarefs = j.data || [] })
         .catch(() => {})
@@ -818,17 +1031,9 @@ async function _autoLoadDrSources() {
     if (el) el.textContent = `${r.count.toLocaleString()} entries loaded${r.fromCache ? ' (cached)' : ''}`
   }).catch(() => {})
 
-  // Live X-Plane datarefs via plugin — no descriptions but always current
-  try {
-    const ctrl = new AbortController()
-    const t = setTimeout(() => ctrl.abort(), 5000)
-    const res = await fetch('/api/v3/datarefs?limit=10000', { signal: ctrl.signal })
-    clearTimeout(t)
-    if (res.ok) {
-      const json = await res.json()
-      _xpDatarefs = json.data || []
-    }
-  } catch(e) {}
+  // Live X-Plane datarefs via plugin — no descriptions but always current.
+  // Also drives the red "dataref not found" marks.
+  await refreshLiveDatarefs(true)
 }
 
 function _searchDr(q, limit = 24) {
@@ -856,6 +1061,7 @@ function _searchDr(q, limit = 24) {
 function _createDrInput(key, widget, placeholder) {
   const wrap = document.createElement('div')
   wrap.className = 'field-row'
+  wrap.dataset.drKey = key
 
   const label = document.createElement('label')
   label.textContent = key
@@ -902,6 +1108,12 @@ function _createDrInput(key, widget, placeholder) {
     if (name.trim()) widget.datarefs[key] = name.trim()
     else delete widget.datarefs[key]
     drop.style.display = 'none'
+    revalidate()
+  }
+
+  function revalidate() {             // re-check this widget after an override changes
+    _markDrInputs(widget)
+    renderGrid()
   }
 
   inp.addEventListener('input', () => {
@@ -932,6 +1144,7 @@ function _createDrInput(key, widget, placeholder) {
   inp.addEventListener('change', () => {
     if (inp.value.trim()) widget.datarefs[key] = inp.value.trim()
     else delete widget.datarefs[key]
+    revalidate()
   })
 
   inp.addEventListener('blur', () => setTimeout(() => { drop.style.display = 'none' }, 160))
@@ -961,98 +1174,9 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
 }
 
-const ICONS = {
-  airspeed: '⏱', altimeter: '↕', attitude: '✈', vsi: '↕', heading: '🧭', engine: '⚙',
-  flaps: '⬇', gear: '⬤', egt: '🌡', cht: '🔥', egtcyl: '🌡', oil: '🛢', obs: '🧭', transponder: '📡', lights: '💡',
-  autopilot: '🤖', radio: '📻', fuel: '⛽',
-}
-
-const DATAREF_DEFAULTS = {
-  airspeed:  { kias: 'sim/cockpit2/gauges/indicators/airspeed_kts_pilot' },
-  altimeter: { altitude_ft: 'sim/cockpit2/gauges/indicators/altitude_ft_pilot', baro_setting: 'sim/cockpit2/gauges/actuators/barometer_setting_in_hg_pilot' },
-  attitude:  { pitch_deg: 'sim/flightmodel/position/theta', roll_deg: 'sim/flightmodel/position/phi', slip_deg: 'sim/cockpit2/gauges/indicators/slip_deg' },
-  vsi:       { vvi_fpm: 'sim/cockpit2/gauges/indicators/vvi_fpm_pilot' },
-  heading:   { heading_deg: 'sim/cockpit2/gauges/indicators/heading_electric_deg_mag_pilot', bug_deg: 'sim/cockpit/autopilot/heading_mag' },
-  engine:    { n1_array: 'sim/flightmodel/engine/ENGN_N1_', n2_array: 'sim/flightmodel/engine/ENGN_N2_' },
-  flaps:     { flap_handle: 'sim/cockpit2/controls/flap_handle_deploy_ratio', flap_actual: 'sim/flightmodel2/controls/flap1_deploy_ratio' },
-  gear:      { gear_handle: 'sim/cockpit/switches/gear_handle_status', gear_deploy: 'sim/flightmodel2/gear/deploy_ratio' },
-  egt:       { egt: 'sim/cockpit2/engine/indicators/EGT_deg_C', ff: 'sim/cockpit2/engine/indicators/fuel_flow_kg_sec' },
-  cht:       { cht: 'sim/cockpit2/engine/indicators/CHT_CYL_deg_C', cht_avg: 'sim/cockpit2/engine/indicators/CHT_deg_C', egt: 'sim/cockpit2/engine/indicators/EGT_deg_C' },
-  egtcyl:    { egt: 'sim/cockpit2/engine/indicators/EGT_CYL_deg_C', egt_avg: 'sim/cockpit2/engine/indicators/EGT_deg_C' },
-  obs: {
-    nav1_obs: 'sim/cockpit2/radios/actuators/nav1_obs_deg_mag_pilot', nav1_hdef: 'sim/cockpit/radios/nav1_hdef_dot',
-    nav1_fromto: 'sim/cockpit/radios/nav1_fromto', nav1_gs_flag: 'sim/cockpit/radios/nav1_flag_glideslope', nav1_vdef: 'sim/cockpit/radios/nav1_vdef_dot',
-    nav2_obs: 'sim/cockpit2/radios/actuators/nav2_obs_deg_mag_pilot', nav2_hdef: 'sim/cockpit/radios/nav2_hdef_dot',
-    nav2_fromto: 'sim/cockpit/radios/nav2_fromto', nav2_gs_flag: 'sim/cockpit/radios/nav2_flag_glideslope', nav2_vdef: 'sim/cockpit/radios/nav2_vdef_dot',
-  },
-  oil:         { oil_temp: 'sim/cockpit2/engine/indicators/oil_temperature_deg_C', oil_press: 'sim/cockpit2/engine/indicators/oil_pressure_psi' },
-  transponder: { code: 'sim/cockpit/radios/transponder_code', mode: 'sim/cockpit/radios/transponder_mode', ident: 'sim/cockpit/radios/transponder_id' },
-  lights: {
-    landing:   'sim/cockpit2/switches/landing_lights_on',
-    taxi:      'sim/cockpit2/switches/taxi_light_on',
-    nav:       'sim/cockpit2/switches/navigation_lights_on',
-    beacon:    'sim/cockpit2/switches/beacon_on',
-    strobe:    'sim/cockpit2/switches/strobe_lights_on',
-    logo:      'sim/cockpit2/switches/logo_lights_on',
-    wing:      'sim/cockpit2/switches/wing_lights_on',
-    formation: 'sim/cockpit2/switches/formation_lights_on',
-  },
-  autopilot: {
-    ap_on:          'sim/cockpit2/autopilot/autopilot_on',
-    fd_mode:        'sim/cockpit2/autopilot/flight_director_mode',
-    heading_dial:   'sim/cockpit2/autopilot/heading_dial_deg_mag_pilot',
-    altitude_dial:  'sim/cockpit2/autopilot/altitude_dial_ft',
-    vvi_dial:       'sim/cockpit2/autopilot/vvi_dial_fpm',
-    airspeed_dial:  'sim/cockpit2/autopilot/airspeed_dial_kts',
-    heading_mode:   'sim/cockpit2/autopilot/heading_mode',
-    altitude_mode:  'sim/cockpit2/autopilot/altitude_mode',
-    athr_on:        'sim/cockpit2/autopilot/autothrottle_on',
-    athr_arm:       'sim/cockpit2/autopilot/autothrottle_arm',
-    hnav_armed:     'sim/cockpit2/autopilot/hnav_armed',
-    glideslope_armed: 'sim/cockpit2/autopilot/glideslope_armed',
-    alt_hold_armed: 'sim/cockpit2/autopilot/altitude_hold_armed',
-    bkcrse_on:      'sim/cockpit2/autopilot/backcourse_on',
-    heading_status: 'sim/cockpit2/autopilot/heading_status',
-    nav_status:     'sim/cockpit2/autopilot/nav_status',
-    alt_hold_status:'sim/cockpit2/autopilot/altitude_hold_status',
-    vvi_status:     'sim/cockpit2/autopilot/vvi_status',
-    speed_status:   'sim/cockpit2/autopilot/speed_status',
-    gls_status:     'sim/cockpit2/autopilot/glideslope_status',
-    TOGA_status:    'sim/cockpit2/autopilot/TOGA_status',
-  },
-  radio: {
-    com1_mhz:     'sim/cockpit2/radios/actuators/com1_frequency_Mhz',
-    com1_khz:     'sim/cockpit2/radios/actuators/com1_frequency_khz',
-    com1_sby_mhz: 'sim/cockpit2/radios/actuators/com1_standby_frequency_Mhz',
-    com1_sby_khz: 'sim/cockpit2/radios/actuators/com1_standby_frequency_khz',
-    com1_rx:      'sim/cockpit2/radios/actuators/audio_selection_com1',
-    com2_mhz:     'sim/cockpit2/radios/actuators/com2_frequency_Mhz',
-    com2_khz:     'sim/cockpit2/radios/actuators/com2_frequency_khz',
-    com2_sby_mhz: 'sim/cockpit2/radios/actuators/com2_standby_frequency_Mhz',
-    com2_sby_khz: 'sim/cockpit2/radios/actuators/com2_standby_frequency_khz',
-    com2_rx:      'sim/cockpit2/radios/actuators/audio_selection_com2',
-    nav1_mhz:     'sim/cockpit2/radios/actuators/nav1_frequency_Mhz',
-    nav1_khz:     'sim/cockpit2/radios/actuators/nav1_frequency_khz',
-    nav1_sby_mhz: 'sim/cockpit2/radios/actuators/nav1_standby_frequency_Mhz',
-    nav1_sby_khz: 'sim/cockpit2/radios/actuators/nav1_standby_frequency_khz',
-    nav1_rx:      'sim/cockpit2/radios/actuators/audio_selection_nav1',
-    nav2_mhz:     'sim/cockpit2/radios/actuators/nav2_frequency_Mhz',
-    nav2_khz:     'sim/cockpit2/radios/actuators/nav2_frequency_khz',
-    nav2_sby_mhz: 'sim/cockpit2/radios/actuators/nav2_standby_frequency_Mhz',
-    nav2_sby_khz: 'sim/cockpit2/radios/actuators/nav2_standby_frequency_khz',
-    nav2_rx:      'sim/cockpit2/radios/actuators/audio_selection_nav2',
-    adf1_hz:      'sim/cockpit2/radios/actuators/adf1_frequency_hz',
-    adf1_sby_hz:  'sim/cockpit2/radios/actuators/adf1_standby_frequency_hz',
-    adf1_rx:      'sim/cockpit2/radios/actuators/audio_selection_adf1',
-    adf2_hz:      'sim/cockpit2/radios/actuators/adf2_frequency_hz',
-    adf2_sby_hz:  'sim/cockpit2/radios/actuators/adf2_standby_frequency_hz',
-    adf2_rx:      'sim/cockpit2/radios/actuators/audio_selection_adf2',
-  },
-  fuel: { fuel_qty: 'sim/cockpit2/fuel/fuel_quantity' },
-}
-
 // init
 ;(async () => {
+  initPalette()
   await renderHome()
   testConnection(true)    // silent — updates nav badge, no spinner in Settings
   _autoLoadDrSources()

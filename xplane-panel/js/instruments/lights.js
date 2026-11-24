@@ -20,8 +20,8 @@ const LIGHT_TYPES = [
     id: 'nav', label: 'NAV', icon: '🔴',
     hasDref:    'sim/aircraft/lighting/acf_has_nav_lights',
     switchDref: 'sim/cockpit2/switches/navigation_lights_on',
-    cmdOn:      'sim/lights/navigation_lights_on',
-    cmdOff:     'sim/lights/navigation_lights_off',
+    cmdOn:      'sim/lights/nav_lights_on',      // X-Plane 12 name (navigation_lights_* doesn't exist)
+    cmdOff:     'sim/lights/nav_lights_off',
   },
   {
     id: 'beacon', label: 'BEACON', icon: '🔴',
@@ -37,38 +37,50 @@ const LIGHT_TYPES = [
     cmdOn:      'sim/lights/strobe_lights_on',
     cmdOff:     'sim/lights/strobe_lights_off',
   },
-  {
-    id: 'logo', label: 'LOGO', icon: '✨',
-    hasDref:    null,
-    switchDref: 'sim/cockpit2/switches/logo_lights_on',
-    cmdOn:      'sim/lights/logo_lights_on',
-    cmdOff:     'sim/lights/logo_lights_off',
-  },
-  {
-    id: 'wing', label: 'WING', icon: '💡',
-    hasDref:    null,
-    switchDref: 'sim/cockpit2/switches/wing_lights_on',
-    cmdOn:      'sim/lights/wing_lights_on',
-    cmdOff:     'sim/lights/wing_lights_off',
-  },
-  {
-    id: 'formation', label: 'FORM', icon: '🔵',
-    hasDref:    null,
-    switchDref: 'sim/cockpit2/switches/formation_lights_on',
-    cmdOn:      'sim/lights/formation_lights_on',
-    cmdOff:     'sim/lights/formation_lights_off',
-  },
 ]
+
+// ── Generic lights (logo, wing, formation, ice, …) ───────────────────────────
+// X-Plane 12 has no dedicated datarefs for these: aircraft authors wire them to
+// one of the 128 slots of generic_lights_switch, and which slot means what is
+// different for every aircraft. So they are configured per widget in the Panel
+// Manager as "LABEL=slot" pairs, e.g. "LOGO=3, WING=5" (slots are 1-based, the
+// same numbering as the sim/lights/generic_NN_light_tog commands).
+const GENERIC_DREF      = 'sim/cockpit2/switches/generic_lights_switch'
+const GENERIC_SLOTS     = 128
+const GENERIC_CMD_SLOTS = 64    // X-Plane only has toggle commands for slots 1–64
+
+export function parseGenericLights(spec) {
+  const out = []
+  for (const part of String(spec ?? '').split(/[,;\n]+/)) {
+    const m = part.trim().match(/^(.+?)\s*[=:]\s*(\d+)$/)
+    if (!m) continue
+    const slot = parseInt(m[2], 10)
+    if (slot < 1 || slot > GENERIC_SLOTS || out.some(g => g.slot === slot)) continue
+    out.push({ label: m[1].trim().toUpperCase().slice(0, 10), slot })
+  }
+  return out
+}
+
+function _genericType({ label, slot }) {
+  return {
+    id: `generic_${slot}`, label, icon: '💡',
+    genericSlot: slot,
+    cmdTog: slot <= GENERIC_CMD_SLOTS ? `sim/lights/generic_${String(slot).padStart(2, '0')}_light_tog` : null,
+  }
+}
 
 export const DEFAULTS = {}
 for (const lt of LIGHT_TYPES) {
   DEFAULTS[lt.id] = lt.switchDref
 }
+DEFAULTS.generic = GENERIC_DREF
 
 export class LightSwitches extends BaseInstrument {
   constructor(canvas, config = {}, datarefs = {}, resolvedIds = {}) {
     super(canvas, config)
     this._drefs       = { ...DEFAULTS, ...datarefs }
+    // standard switches + the generic-light buttons configured for this widget
+    this._types       = [...LIGHT_TYPES, ...parseGenericLights(config.genericLights).map(_genericType)]
     this._resolvedIds = resolvedIds
     this._lights      = []
     this._detected    = false
@@ -85,10 +97,10 @@ export class LightSwitches extends BaseInstrument {
 
   setAvailableLights(availableIds) {
     if (!availableIds || availableIds.length === 0) {
-      this._lights = LIGHT_TYPES.map(lt => ({ type: lt, state: 0, detected: false }))
+      this._lights = this._types.map(lt => ({ type: lt, state: 0, detected: false }))
     } else {
       const idSet = new Set(availableIds)
-      this._lights = LIGHT_TYPES
+      this._lights = this._types
         .filter(lt => idSet.has(lt.id))
         .map(lt => ({ type: lt, state: 0, detected: true }))
     }
@@ -98,12 +110,13 @@ export class LightSwitches extends BaseInstrument {
 
   update(state) {
     let anyNew = false
-    for (const lt of LIGHT_TYPES) {
-      const v = state[this._drefs[lt.id]]
+    for (const lt of this._types) {
+      let v = state[this._drefs[lt.genericSlot ? 'generic' : lt.id]]
+      if (lt.genericSlot) v = Array.isArray(v) ? v[lt.genericSlot - 1] : undefined
       if (v != null) {
         this._hasData = true
         const s = Array.isArray(v) ? (v[0] ?? 0) : v
-        const on = s !== 0 && s !== false ? 1 : 0
+        const on = s !== 0 && s !== false ? 1 : 0     // generic switches are 0–1 ratios
         if (this._states[lt.id] !== on) {
           this._states[lt.id] = on
           anyNew = true
@@ -130,7 +143,7 @@ export class LightSwitches extends BaseInstrument {
       const seen = Object.keys(this._states)
       if (seen.length > 0) {
         const seenSet = new Set(seen)
-        this._lights = LIGHT_TYPES
+        this._lights = this._types
           .filter(lt => seenSet.has(lt.id))
           .map(lt => ({ type: lt, state: this._states[lt.id] ?? 0, detected: false }))
       }
@@ -179,6 +192,17 @@ export class LightSwitches extends BaseInstrument {
     if (!entry) return
     const lt    = entry.type
     const wasOn = this._states[lt.id] ?? 0
+
+    if (lt.genericSlot) {
+      // Toggle command when X-Plane has one (respects the aircraft's own logic),
+      // otherwise write the slot of generic_lights_switch directly.
+      const id = this._resolvedIds[this._drefs.generic]
+      const write = () => { if (id != null) writeDataref(id, wasOn ? 0 : 1, lt.genericSlot - 1).catch(() => {}) }
+      if (lt.cmdTog) triggerCommand(lt.cmdTog).catch(write)
+      else write()
+      return
+    }
+
     const cmd   = wasOn ? lt.cmdOff : lt.cmdOn
 
     triggerCommand(cmd).catch(() => {
@@ -285,4 +309,19 @@ export class LightSwitches extends BaseInstrument {
     ctx.textBaseline = 'middle'
     ctx.fillText(isOn ? 'ON' : 'OFF', bx + bw / 2, dotY + dotR + statusSize + 2)
   }
+}
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'lights',
+  label:    'Light Switches',
+  icon:     '💡',
+  order:    150,
+  datarefs: DEFAULTS,
+  options: [
+    { key: 'genericLights', label: 'Generic light buttons', type: 'text',
+      placeholder: 'LOGO=3, WING=5, FORM=7',
+      help: 'Extra buttons for lights wired to generic_lights_switch (logo, wing, ice…). LABEL=slot, slots 1–128; '
+          + 'which slot is which depends on the aircraft — check its docs or DataRefTool.' },
+  ],
 }

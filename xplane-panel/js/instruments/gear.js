@@ -192,3 +192,12 @@ export class GearIndicator extends BaseInstrument {
     ctx.restore()
   }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'gear',
+  label:    'Gear',
+  icon:     '⬤',
+  order:    80,
+  datarefs: DEFAULTS,
+}

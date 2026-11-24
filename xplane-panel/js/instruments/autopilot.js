@@ -651,3 +651,12 @@ export class AutopilotPanel extends BaseInstrument {
     return this._font(this._fitRectSize(width, text, maxHeight), 'bold')
   }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'autopilot',
+  label:    'Autopilot',
+  icon:     '🤖',
+  order:    160,
+  datarefs: DEFAULTS,
+}

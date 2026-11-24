@@ -87,8 +87,10 @@ export async function readDataref(id) {
   return json.data
 }
 
-export async function writeDataref(id, value) {
-  const res = await fetch(`${_restBase()}/v3/datarefs/${id}/value`, {
+// index (optional): write one element of an array dataref, e.g. generic_lights_switch[3]
+export async function writeDataref(id, value, index) {
+  const q = Number.isInteger(index) ? `?index=${index}` : ''
+  const res = await fetch(`${_restBase()}/v3/datarefs/${id}/value${q}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ data: value }),
@@ -105,6 +107,22 @@ export async function writeDataref(id, value) {
 // Activation uses the WebSocket — REST endpoints return 404 in X-Plane 12.
 // The confirmed working format is command_set_is_active with duration:0 (momentary).
 export async function triggerCommand(name) {
+  const id = await _commandId(name)
+  _sendCommand(id, true, 0)
+  return true
+}
+
+// Press a command like a real button: begin, hold for holdMs, end. Some add-ons (e.g. the
+// Laminar A330 pushbuttons) act on a press with a begin and an end and ignore the
+// momentary duration:0 form that triggerCommand() uses.
+export async function pressCommand(name, holdMs = 120) {
+  const id = await _commandId(name)
+  _sendCommand(id, true)
+  setTimeout(() => { try { _sendCommand(id, false) } catch {} }, holdMs)
+  return true
+}
+
+async function _commandId(name) {
   if (_cmdNameToId.size === 0) {
     const res = await fetch(`${_restBase()}/v3/commands?limit=10000`)
     if (!res.ok) throw new Error(`Commands fetch failed: ${res.status}`)
@@ -113,13 +131,16 @@ export async function triggerCommand(name) {
   }
   const id = _cmdNameToId.get(name)
   if (id == null) throw new Error(`Command not found: "${name}"`)
+  return id
+}
+
+function _sendCommand(id, active, duration) {
   if (!_ws || _ws.readyState !== WebSocket.OPEN) throw new Error('WebSocket not connected')
   _ws.send(JSON.stringify({
     req_id: _reqIdCounter++,
     type:   'command_set_is_active',
-    params: { commands: [{ id, is_active: true, duration: 0 }] },
+    params: { commands: [{ id, is_active: active, ...(duration !== undefined ? { duration } : {}) }] },
   }))
-  return true
 }
 
 export function searchCommands(pattern) {

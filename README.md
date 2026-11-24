@@ -47,9 +47,11 @@ To find your sim PC's IP address:
 
 1. Open the Panel Manager at `http://<sim-pc-ip>:8088`
 2. Click **New Panel**, give it a name, choose grid size and background colour
-3. Drag instruments from the left palette onto the grid
+3. Drag instruments from the left palette onto the grid. The palette is grouped into collapsible sections — **General** plus one per aircraft pack (e.g. **King Air 350**)
 4. Click an instrument cell to resize it (col/row span) or configure it (e.g. select which radios to show)
-5. **Save**, then click **Open** - this opens `panel.html` in a new tab with the live display
+5. **Red instruments** — with X-Plane running, the Panel Manager checks every instrument's datarefs against what the loaded aircraft publishes. An instrument that can't work (typically an aircraft-specific one, e.g. a King Air gauge while flying the Baron) is shown red in the palette and on the grid; hover it to see what's missing. In its sidebar the missing dataref fields are outlined in red — point them to existing datarefs and the instrument turns normal again. Switching aircraft re-checks automatically when you come back to the page (or click **Recheck**)
+6. **Touch controls** (top bar) shows or hides the on-screen buttons of instruments that have them, for the whole panel. Each widget can override this in its sidebar (Panel default / Show / Hide) — handy for display-only screens where a stray tap shouldn't change anything
+7. **Save**, then click **Open** - this opens `panel.html` in a new tab with the live display
 
 To show a panel on a dedicated device, open the panel URL on that device. The Panel Manager does not need to stay open.
 
@@ -97,11 +99,81 @@ All panels automatically respond to sim conditions in real time:
 | Oil | Oil temp + pressure butterfly gauge. **Per-engine** - select engine when adding. Colour zones from aircraft limits arcs. |
 | Fuel | Fuel quantity gauge - one horizontal bar per tank, all tanks in a single widget. Tank count and labels (LEFT/RIGHT/CTR/etc.) auto-detected from the loaded aircraft. Green/amber/red fill with percentage readout. |
 | Transponder | 4-digit octal squawk code, mode selector, IDENT button |
-| Lights | Aircraft lighting panel (landing, taxi, nav, beacon, strobe, logo, wing, formation) - auto-hides lights not present on the aircraft |
+| Lights | Aircraft lighting panel (landing, taxi, nav, beacon, strobe) - auto-hides lights not present on the aircraft. Logo, wing, ice and other lights are wired to X-Plane's *generic lights* differently on every aircraft, so you add them per widget under **Generic light buttons**, e.g. `LOGO=3, WING=5` (slot numbers from the aircraft's docs or DataRefTool) |
 | Autopilot | Full AP control: AP master, FD, A/THR (hidden on GA aircraft), HDG/ALT/V/S/SPD knobs, mode buttons, mode annunciator |
 | Radio | COM1/2, NAV1/2, ADF1/2 - active/standby freq, swap, tuning, per-radio RX audio toggle |
 | EGT / Cylinders | Per-cylinder EGT bar chart. **Per-engine** — select engine when adding. One bar per active cylinder. Mirrors the CHT layout. |
 | OBS / CDI | Course deviation indicator (HSI-style). **Per-NAV** — select NAV1 or NAV2 when adding. Shows OBS course, lateral deviation, glideslope needle, and flag. |
+| Turn Coordinator | Turn rate + slip ball |
+| Blank Tile | Empty filler tile for spacing out a panel layout |
+| FMS CDU | Screen and keypad of X-Plane's built-in FMS — works with every aircraft that uses it (Laminar A330, 737-800, MD-82…). Airbus MCDU or Boeing CDU keypad (auto-selected from the aircraft ICAO), CDU 1 or 2. Switch touch controls off for a screen-only display |
+
+### King Air 350 pack
+
+Aircraft-specific replicas for the King Air 350 (contributed). Most read the add-on's own `KA350/...` datarefs, so they only work with that aircraft loaded — with any other aircraft they show no data and appear **red** in the Panel Manager. The engine gauges and the annunciator panel use only `KA350/...` datarefs; the EADI, EHSI and steam gauges partly use standard datarefs, so they move with other aircraft but are incomplete.
+
+| Instrument | Description |
+|---|---|
+| King Air EADI | Electronic attitude display with FD/nav deviation, radio altitude and DH — touch buttons: DH −/+ |
+| King Air EHSI | Electronic HSI with active/preselect course, DME, waypoint ID — touch buttons: HDG −/+, SYNC, CRS −/+ |
+| King Air Altimeter | Drum-pointer altimeter with baro window — touch buttons: BARO −/+, 29.92 |
+| King Air Airspeed / VSI / Standby Attitude | Steam gauges calibrated to King Air markings |
+| King Air Torque / ITT / Turbine RPM / Prop RPM / Fuel Flow / Oil | Dual-needle twin-engine gauges |
+| King Air Annunciator Panel | Caution/advisory annunciator panel |
+
+### Pilatus PC-6 pack
+
+Steam gauges styled and calibrated for the PC-6 Porter (contributed). They use standard X-Plane datarefs, so they also work on other light aircraft, but the airspeed and VSI markings are PC-6 specific.
+
+| Instrument | Description |
+|---|---|
+| PC-6 Airspeed / VSI | Airspeed with PC-6 arcs; VSI with the PC-6 non-linear scale |
+| PC-6 Attitude (vacuum) | Attitude indicator driven by the vacuum gyro datarefs |
+| PC-6 Altimeter | Three-pointer altimeter — touch buttons: BARO −/+, 29.92 |
+| PC-6 Heading | Directional gyro — touch buttons: HDG bug −/+, SYNC |
+| PC-6 OBS / CDI | Per-NAV CDI — touch buttons: OBS −/+ |
+| PC-6 ITT + Fuel Flow | Per-engine turbine ITT + fuel flow butterfly gauge |
+
+### Boeing 737 pack
+
+Glass flight, navigation, engine and fuel displays laid out like the Laminar 737-800's display units. They read X-Plane's standard engine and fuel datarefs, so they also work with other twin jets; tanks are identified from their position, not their index. The engine and fuel displays have a **Units** option (LBS, the Laminar 737 default, or KG).
+
+| Instrument | Description |
+|---|---|
+| 737 PFD | Attitude with flight director, speed tape (selected speed, trend vector, Vmo barber pole, Mach), altitude tape (selected altitude, baro), vertical speed, heading arc with heading bug and track, ILS deviation, radio altitude, flight-mode annunciations (from X-Plane's generic autopilot status) |
+| 737 ND (Map) | Expanded MAP mode: compass arc, track and heading, heading bug, range rings (follow the cockpit EFIS range knob), GS / TAS / wind, active waypoint with distance and time-to-go. X-Plane doesn't publish the flight plan, so only the active leg is drawn |
+| 737 Standby (ISFD) | Standby attitude, airspeed and altitude from the standby instruments — touch buttons: BARO −/+, STD |
+| 737 Upper Engine Display | TAT, N1 and EGT dials with digital readouts and redlines, REV indication, N1-limit bug (Laminar 737), fuel flow, FUEL QTY box with total |
+| 737 Lower Engine Display | N2 dials, fuel flow, oil pressure and temperature (digital + small scale), oil quantity. No VIB — X-Plane doesn't publish engine vibration |
+| 737 Fuel | TANK 1 / CTR / TANK 2 dials with LOW alert, total, fuel used, total fuel flow (× 1000) |
+
+### Airbus A330 pack
+
+ECAM-style displays (green values, cyan units). Also based on standard datarefs, so they work with the Laminar A330-300 and other jets.
+
+| Instrument | Description |
+|---|---|
+| A330 PFD | Airbus PFD: five-column FMA (thrust, vertical, lateral, approach capability, AP / FD / A/THR) with mode-change boxes, attitude with FD bars, speed tape with VMAX, next-flap VFE, trend and target, altitude tape with the 20 ft drum and selected altitude, V/S, heading tape with selected heading and track, LS deviation and ILS info, radio altitude, QNH / STD. "QNH units" option: inHg or hPa |
+| A330 ND | Airbus navigation display, heading up, following the cockpit EFIS knob (ROSE LS / VOR / NAV, ARC, PLAN) and range: compass with selected heading and track, range rings, GS / TAS / wind, active waypoint with bearing, distance and ETA, ILS / VOR course and deviation, G/S scale, VOR / ADF pointers and info when selected. Only the active leg is drawn (X-Plane doesn't publish the flight plan) |
+| A330 Standby (ISIS) | Attitude, Airbus speed and altitude tapes, baro in hPa / inHg or STD, LS deviation. Touch buttons LS, ATT RST, BARO −/+ and STD operate the cockpit ISIS on the Laminar A330 |
+| A330 Engine / Warning Display (E/WD) | EPR, EGT and N1 dials, fuel flow and N3 digits, thrust limit (CLB / MCT / FLX / TOGA + EPR), fuel on board, slats/flaps, ECAM memo and warnings. "Primary parameter" switches EPR (Trent) ↔ N1 |
+| A330 WHEEL (SD page) | Ground spoilers, gear position, brake temperatures for the eight main wheels with hottest-brake arc and release indication, autobrake mode, L/G CTL / NORM BRK / ANTI SKID status, TAT / SAT / UTC / GW strip |
+| A330 ENGINE (SD page) | N2 (Trent intermediate spool), fuel used per engine, oil quantity / pressure / temperature, nacelle temperature dials, ignition, TAT / SAT / UTC / GW strip. No VIB (not published by X-Plane or the Laminar A330) |
+| A330 CRUISE (SD page) | Fuel used per engine and total, oil quantity, landing elevation, cabin ΔP / V/S / altitude, cockpit, cabin zone and cargo temperatures, TAT / SAT / UTC / GW strip |
+| A330 BLEED (SD page) | Packs (outlet / compressor temperatures, C/H and flow needles), pack, ram air, crossbleed, IP and HP valves, precooler pressure and temperature. Needs the Laminar A330 |
+| A330 CAB PRESS (SD page) | Landing elevation, ΔP / V/S / cabin altitude dials, vent extract, outflow and safety valves, packs |
+| A330 ELEC AC (SD page) | AC 1 / AC 2 / AC ESS buses and feeds, generators (load, volts, Hz), IDG temperatures, TRs, APU GEN, EMER GEN, STAT INV. Needs the Laminar A330 |
+| A330 HYD (SD page) | Green / blue / yellow pressure, electric pumps, fire valves, engine pumps, RAT with RPM, reservoir quantity |
+| A330 COND (SD page) | Cockpit and six cabin zone temperatures, duct temperatures and trim valves, hot air manifold and valves, forward and bulk cargo. Needs the Laminar A330 |
+| A330 DOOR/OXY (SD page) | Passenger doors with SLIDE armed state, avionics and cargo doors, crew oxygen pressure, cabin V/S |
+| A330 APU (SD page) | APU GEN (load, volts, Hz), AVAIL, bleed valve and pressure, N and EGT dials, FLAP OPEN |
+| A330 F/CTL (SD page) | Spoilers / speed brakes, inner and outer ailerons, PRIM / SEC computers, pitch trim, elevators, rudder and rudder trim, G B Y hydraulic supply per surface |
+| A330 STATUS (SD page) | Status text (limitations, procedures, inoperative systems) in the aircraft colours, or NORMAL. Needs the Laminar A330 |
+| A330 C/B (SD page) | Circuit breaker page — always NORMAL (not simulated by the Laminar A330) |
+| A330 SD (selected page) | One lower ECAM display that follows the cockpit ECAM control panel: shows the selected system page, or the automatic page (CRUISE / WHEEL in flight, ENG / WHEEL / DOOR on the ground). Needs the Laminar A330 |
+| A330 ECAM control panel | Page pushbuttons with their lights, ALL, T.O CONFIG, EMER CANC, CLR, STS, RCL — operate the cockpit ECAM. Needs the Laminar A330 |
+| A330 ELEC DC (SD page) | DC BAT / DC 1 / DC 2 / DC ESS / DC APU buses and links, batteries (volts, amps), TRs (volts, amps, AC source), STAT INV. Needs the Laminar A330 |
+| A330 FUEL (SD page) | Laminar layout: fuel used per engine and total, LP and crossfeed valves, wing and centre pumps, wing outline with outer / inner / collector / centre quantities and tank temperatures, APU feed, trim tank, F.FLOW (kg/min), FOB |
 
 ### Per-engine instruments (EGT, CHT, Oil, EGT / Cylinders)
 
@@ -163,6 +235,7 @@ xplane-panel/
     ├── xplane-api.js       X-Plane WebSocket + REST abstraction
     ├── aircraft-profile.js Aircraft capability probe (engine type, limits, fuel tanks, speeds…)
     ├── panel.js            panel.html entry point - instantiates instruments
+    ├── instrument-registry.js  Discovers instruments at runtime (GET /instruments + META exports)
     ├── panel-store.js      Panel config CRUD (server + localStorage fallback)
     ├── dataref-registry.js DataRefs.txt loader + search
     └── instruments/
@@ -184,7 +257,14 @@ xplane-panel/
         ├── autopilot.js
         ├── radio.js
         ├── egtcyl.js       Per-cylinder EGT bar chart (per-engine)
-        └── obs.js          OBS / CDI course deviation indicator (per-NAV)
+        ├── obs.js          OBS / CDI course deviation indicator (per-NAV)
+        ├── fmsCdu.js       FMS CDU (X-Plane built-in FMS screen + keypad)
+        ├── …               turnCoordinator.js, blank.js
+        ├── _glass.js       Shared drawing helpers for the airliner displays ("_" files are not listed as instruments)
+        ├── King Air 350/   One sub-folder per palette section — drop files in, no registration needed
+        ├── Pilatus PC-6/
+        ├── Boeing 737/
+        └── Airbus A330/
 ```
 
 ---
@@ -195,6 +275,14 @@ xplane-panel/
 - Check that the XPanelServer plugin is enabled (Plugins → XPanel Server → Enable Server)
 - Verify X-Plane is running with "Accept incoming connections" enabled
 - Check Windows Firewall isn't blocking the plugin port (default 8088; check **Plugins → XPanel Server → Set Port** if you changed it)
+
+**An instrument is red in the Panel Manager, or shows nothing on the panel**
+- Its datarefs don't exist in X-Plane right now. Hover it in the Panel Manager to see which ones and what it needs (e.g. *"Needs: the King Air 350 add-on"*). Aircraft-specific instruments only work with that aircraft loaded.
+- If the aircraft is right, the dataref may have a different name in your version/add-on: select the widget and type the correct name into the field outlined in red (autocomplete lists what X-Plane publishes).
+- Nothing is marked red while X-Plane is unreachable — the sidebar then says *"X-Plane not reachable — datarefs not checked."*
+
+**Logo / wing / ice light buttons are missing from Light Switches**
+- X-Plane 12 has no dedicated datarefs for these; each aircraft wires them to a numbered *generic light*. Select the Light Switches widget and fill **Generic light buttons**, e.g. `LOGO=3, WING=5` — the slot numbers come from the aircraft's documentation, or watch `sim/cockpit2/switches/generic_lights_switch` in DataRefTool while flipping the switch in the cockpit.
 
 **Instruments load but values don't update**
 - Open the browser console (F12) and look for WebSocket errors

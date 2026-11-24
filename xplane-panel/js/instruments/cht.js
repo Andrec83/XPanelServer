@@ -184,3 +184,13 @@ export class CHTGauge extends BaseInstrument {
     }
   }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'cht',
+  label:    'CHT / Cylinders',
+  icon:     '🔥',
+  order:    100,
+  datarefs: DEFAULTS,
+  select:   'engine',
+}

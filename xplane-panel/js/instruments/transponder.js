@@ -216,3 +216,12 @@ export class Transponder extends BaseInstrument {
     ctx.fillText(active ? '● IDENT' : 'IDENT', w / 2, sy + sh / 2)
   }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'transponder',
+  label:    'Transponder',
+  icon:     '📡',
+  order:    140,
+  datarefs: DEFAULTS,
+}

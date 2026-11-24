@@ -286,3 +286,12 @@ export class HeadingIndicator extends BaseInstrument {
     return current + diff * factor
   }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'heading',
+  label:    'Heading',
+  icon:     '🧭',
+  order:    50,
+  datarefs: DEFAULTS,
+}

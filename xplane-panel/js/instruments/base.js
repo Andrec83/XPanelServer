@@ -44,6 +44,20 @@ export const NIGHT_THEME = {
   alertColor:    '#f44',
 }
 
+// Hold-to-repeat timing for touch buttons (see ARCHITECTURE.md → Interactive patterns)
+const REPEAT_DELAY_MS    = 350
+const REPEAT_INTERVAL_MS = 100
+
+/**
+ * Render pipeline, executed by _startLoop() whenever the instrument is dirty:
+ *
+ *   1. _render()              your instrument: dials, needles, labels (physical surfaces)
+ *   2. _drawAmbientOverlays() night darkness + flood light — dims everything drawn in (1)
+ *   3. _renderEmissive()      optional: self-lit elements (LED digits, annunciators, CRT
+ *                             symbology) drawn AFTER the darkness so they stay readable
+ *   4. _drawTouchButtons()    on-screen buttons declared via setTouchButtons()
+ *   5. _drawHypoxiaOverlay()  pilot vision blackout — covers everything
+ */
 export class BaseInstrument {
   constructor(canvas, config = {}) {
     this.canvas = canvas
@@ -53,6 +67,9 @@ export class BaseInstrument {
     this._dirty = true
     this._theme   = { ...DEFAULT_THEME, ...(config.theme || {}) }
     this._ambient = { ambientLight: 1, backlitLight: 0, hypoxia: 0, flood: 0 }
+    this._touchButtons = []
+    this._touchOpts    = { height: 0.13, position: 'bottom' }
+    this._touchPressed = null
     this._setupResizeObserver()
     this._startLoop()
   }
@@ -60,8 +77,40 @@ export class BaseInstrument {
   get w() { return this.canvas.width }
   get h() { return this.canvas.height }
 
+  // True unless the panel (or this widget) has touch controls switched off.
+  // panel.js resolves panel.showControls + widget.config.showControls into config.showControls.
+  get controlsVisible() { return this.config.showControls !== false }
+
+  // Pixel height of the touch-button strip (0 when hidden or no buttons declared).
+  // Instruments may use this to shrink their drawing area instead of being overlaid.
+  get touchStripHeight() {
+    if (!this.controlsVisible || this._touchButtons.length === 0) return 0
+    return Math.round(Math.max(24, Math.min(56, this.h * this._touchOpts.height)))
+  }
+
+  /**
+   * Declare on-screen touch buttons. The base class draws them as a strip along the
+   * bottom (or top) of the canvas, hit-tests taps, and implements hold-to-repeat.
+   * They are hidden and inert when touch controls are switched off in the Panel Manager.
+   *
+   *   this.setTouchButtons([
+   *     { id: 'dec',  label: '− HDG', repeat: true, onPress: () => this._adjBug(-1) },
+   *     { id: 'sync', label: 'SYNC',                onPress: () => this._sync() },
+   *   ], { height: 0.13, position: 'bottom' })
+   *
+   * Button fields: id, label, onPress(), repeat (hold-to-repeat), lit() → bool (optional
+   * "active" highlight), flex (relative width, default 1). Pass [] to remove all buttons.
+   */
+  setTouchButtons(buttons, opts = {}) {
+    this._touchButtons = buttons || []
+    this._touchOpts    = { ...this._touchOpts, ...opts }
+    if (!this._touchListening) this._setupTouchListeners()
+    this._dirty = true
+  }
+
   update(state) { throw new Error('implement update()') }
   requiredDatarefs() { throw new Error('implement requiredDatarefs()') }
+
   setAircraftProfile(profile) {}
 
   onPointerDown(x, y) {}
@@ -88,6 +137,7 @@ export class BaseInstrument {
 
   destroy() {
     if (this._ro) this._ro.disconnect()
+    this._releaseTouch()
     this._dead = true
   }
 
@@ -114,6 +164,9 @@ export class BaseInstrument {
         this._dirty = false
         this._render()
         this._drawAmbientOverlays()
+        this._renderEmissive()
+        this._drawTouchButtons()
+        this._drawHypoxiaOverlay()
       }
       requestAnimationFrame(tick)
     }
@@ -121,6 +174,10 @@ export class BaseInstrument {
   }
 
   _render() {}
+
+  // Optional hook: self-luminous elements (LED/LCD digits, annunciator lamps, CRT/EFIS
+  // symbology). Drawn after the ambient darkness so it stays readable at night.
+  _renderEmissive() {}
 
   // Drawn on top of every instrument frame — handles luminosity and environmental effects.
   // Luminosity model: visibleBrightness(y) = min(1, ambientLight + backlitLight + floodAtY)
@@ -162,12 +219,103 @@ export class BaseInstrument {
       ctx.fillStyle = grad
       ctx.fillRect(0, 0, w, h)
     }
+  }
 
-    // ── 3. Hypoxia: full-instrument black overlay ────────────────────────────
+  // Hypoxia: full-instrument black overlay, drawn last so it also covers emissive layers.
+  _drawHypoxiaOverlay() {
+    const { ctx, w, h } = this
+    const { hypoxia } = this._ambient
     if (hypoxia > 0.01) {
       ctx.fillStyle = `rgba(0,0,0,${Math.min(0.97, hypoxia).toFixed(3)})`
       ctx.fillRect(0, 0, w, h)
     }
+  }
+
+  // ── touch buttons ───────────────────────────────────────────────────────────
+
+  _touchLayout() {
+    const sh = this.touchStripHeight
+    if (!sh) return []
+    const pad = Math.max(2, Math.round(sh * 0.1))
+    const y   = this._touchOpts.position === 'top' ? pad : this.h - sh + pad
+    const bh  = sh - pad * 2
+    const total = this._touchButtons.reduce((s, b) => s + (b.flex || 1), 0)
+    const avail = this.w - pad * (this._touchButtons.length + 1)
+    let x = pad
+    return this._touchButtons.map(b => {
+      const bw = avail * (b.flex || 1) / total
+      const r  = { btn: b, x, y, w: bw, h: bh }
+      x += bw + pad
+      return r
+    })
+  }
+
+  _drawTouchButtons() {
+    const rects = this._touchLayout()
+    if (!rects.length) return
+    const { ctx } = this
+    const t = this._theme
+    ctx.save()
+    for (const { btn, x, y, w, h } of rects) {
+      const pressed = this._touchPressed === btn.id
+      const lit     = typeof btn.lit === 'function' && btn.lit()
+      ctx.beginPath()
+      ctx.roundRect ? ctx.roundRect(x, y, w, h, Math.min(6, h * 0.25)) : ctx.rect(x, y, w, h)
+      ctx.globalAlpha = 0.82
+      ctx.fillStyle   = pressed ? t.accent : t.panelBg
+      ctx.fill()
+      ctx.globalAlpha = 1
+      ctx.lineWidth   = 1
+      ctx.strokeStyle = pressed || lit ? t.accent : t.frameBorder
+      ctx.stroke()
+      ctx.fillStyle    = pressed ? t.digitalBg : (lit ? t.accent : t.accentDim)
+      ctx.font         = `bold ${Math.max(9, Math.min(h * 0.5, w * 0.22))}px system-ui, sans-serif`
+      ctx.textAlign    = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(btn.label, x + w / 2, y + h / 2 + 1)
+    }
+    ctx.restore()
+  }
+
+  _setupTouchListeners() {
+    this._touchListening = true
+    const c = this.canvas
+    c.addEventListener('pointerdown', e => {
+      if (!this.controlsVisible) return
+      const r = c.getBoundingClientRect()
+      if (r.width <= 0 || r.height <= 0) return
+      const px = (e.clientX - r.left) * (this.w / r.width)
+      const py = (e.clientY - r.top)  * (this.h / r.height)
+      const hit = this._touchLayout().find(b => px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h)
+      if (!hit) return
+      e.preventDefault()
+      c.setPointerCapture?.(e.pointerId)
+      this._pressTouch(hit.btn)
+    })
+    const release = () => this._releaseTouch()
+    c.addEventListener('pointerup',     release)
+    c.addEventListener('pointercancel', release)
+    c.addEventListener('lostpointercapture', release)
+  }
+
+  _pressTouch(btn) {
+    this._releaseTouch()
+    this._touchPressed = btn.id
+    this._dirty = true
+    try { btn.onPress?.() } catch (err) { console.warn('[touch]', btn.id, err) }
+    if (btn.repeat) {
+      this._touchHold = setTimeout(() => {
+        this._touchRepeat = setInterval(() => {
+          try { btn.onPress?.() } catch (err) { console.warn('[touch]', btn.id, err) }
+        }, REPEAT_INTERVAL_MS)
+      }, REPEAT_DELAY_MS)
+    }
+  }
+
+  _releaseTouch() {
+    clearTimeout(this._touchHold); clearInterval(this._touchRepeat)
+    this._touchHold = this._touchRepeat = null
+    if (this._touchPressed !== null) { this._touchPressed = null; this._dirty = true }
   }
 
   _drawNoData() {

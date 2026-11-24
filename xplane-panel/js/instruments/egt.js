@@ -279,3 +279,13 @@ export class EGTGauge extends BaseInstrument {
     ctx.restore()
   }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'egt',
+  label:    'EGT + Fuel Flow',
+  icon:     '🌡',
+  order:    90,
+  datarefs: DEFAULTS,
+  select:   'engine',
+}

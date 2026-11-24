@@ -161,3 +161,12 @@ export class VSI extends BaseInstrument {
     ctx.restore()
   }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'vsi',
+  label:    'VSI',
+  icon:     '↕',
+  order:    40,
+  datarefs: DEFAULTS,
+}

@@ -1,45 +1,10 @@
 import * as api from './xplane-api.js'
 import { probeAircraftProfile, watchAircraftChanges } from './aircraft-profile.js'
 import { getPanel } from './panel-store.js'
-import { AirspeedIndicator } from './instruments/airspeed.js'
-import { Altimeter }         from './instruments/altimeter.js'
-import { AttitudeIndicator } from './instruments/attitude.js'
-import { VSI }               from './instruments/vsi.js'
-import { HeadingIndicator }  from './instruments/heading.js'
-import { EngineGauge }       from './instruments/engine.js'
-import { FlapsIndicator }    from './instruments/flaps.js'
-import { GearIndicator }     from './instruments/gear.js'
-import { EGTGauge }          from './instruments/egt.js'
-import { CHTGauge }          from './instruments/cht.js'
-import { EGTCylGauge }       from './instruments/egtcyl.js'
-import { OBSGauge }          from './instruments/obs.js'
-import { OilGauge }          from './instruments/oil.js'
-import { Transponder }       from './instruments/transponder.js'
-import { LightSwitches }     from './instruments/lights.js'
-import { AutopilotPanel }    from './instruments/autopilot.js'
-import { RadioPanel }        from './instruments/radio.js'
-import { FuelGauge }         from './instruments/fuel.js'
+import { loadInstruments } from './instrument-registry.js'
 
-const INSTRUMENT_MAP = {
-  airspeed: AirspeedIndicator,
-  altimeter: Altimeter,
-  attitude: AttitudeIndicator,
-  vsi: VSI,
-  heading: HeadingIndicator,
-  engine: EngineGauge,
-  flaps: FlapsIndicator,
-  gear: GearIndicator,
-  egt: EGTGauge,
-  cht: CHTGauge,
-  egtcyl: EGTCylGauge,
-  obs:    OBSGauge,
-  oil: OilGauge,
-  transponder: Transponder,
-  lights: LightSwitches,
-  autopilot: AutopilotPanel,
-  radio: RadioPanel,
-  fuel:     FuelGauge,
-}
+// Instruments are discovered at runtime from js/instruments/ — see instrument-registry.js.
+let _registry = null
 
 const params   = new URLSearchParams(location.search)
 const panelId  = params.get('id')
@@ -79,6 +44,13 @@ async function boot() {
   document.getElementById('panel-title').textContent = panel.name
 
   const host = hostParam || localStorage.getItem('xplane_host') || location.hostname || 'localhost'
+
+  try {
+    _registry = await loadInstruments()
+  } catch (err) {
+    showOverlay(err.message)
+    return
+  }
 
   buildGrid(panel)
   showOverlay('Connecting to X-Plane…')
@@ -141,8 +113,13 @@ async function connectAndRun(panel, host) {
       const canvas = cell?.querySelector('canvas')
       if (!canvas) continue
 
-      const Cls = INSTRUMENT_MAP[widget.type]
-      if (!Cls) continue
+      const Cls = _registry.byType.get(widget.type)?.cls
+      if (!Cls) {
+        console.warn(`[panel] unknown instrument type "${widget.type}" — is its file missing from js/instruments/?`)
+        cell.textContent = `Unknown instrument: ${widget.type}`
+        cell.classList.add('grid-cell-missing')
+        continue
+      }
 
       const merged = { ...getDefaults(widget.type), ...widget.datarefs }
       const idMap = {}
@@ -150,7 +127,17 @@ async function connectAndRun(panel, host) {
         if (resolved[name]) idMap[name] = resolved[name].id
       }
 
-      const inst = new Cls(canvas, widget.config || {}, widget.datarefs || {}, idMap)
+      // Touch controls: per-widget override (true/false) wins over the panel-wide switch.
+      const showControls = widget.config?.showControls ?? panel.showControls ?? true
+      const config = { ...(widget.config || {}), showControls }
+
+      let inst
+      try {
+        inst = new Cls(canvas, config, widget.datarefs || {}, idMap)
+      } catch (err) {
+        console.error(`[panel] "${widget.type}" failed to start:`, err)
+        continue
+      }
       _instruments.push({ instrument: inst, widget })
     }
 
@@ -233,161 +220,7 @@ async function connectAndRun(panel, host) {
 }
 
 function getDefaults(type) {
-  const map = {
-    airspeed:  { kias: 'sim/cockpit2/gauges/indicators/airspeed_kts_pilot' },
-    altimeter: { altitude_ft: 'sim/cockpit2/gauges/indicators/altitude_ft_pilot', baro_setting: 'sim/cockpit2/gauges/actuators/barometer_setting_in_hg_pilot' },
-    attitude:  { pitch_deg: 'sim/flightmodel/position/theta', roll_deg: 'sim/flightmodel/position/phi', slip_deg: 'sim/cockpit2/gauges/indicators/slip_deg' },
-    vsi:       { vvi_fpm: 'sim/cockpit2/gauges/indicators/vvi_fpm_pilot' },
-    heading:   { heading_deg: 'sim/cockpit2/gauges/indicators/heading_electric_deg_mag_pilot',
-                 bug_deg: 'sim/cockpit/autopilot/heading_mag' },
-    engine:    { n1_array: 'sim/flightmodel/engine/ENGN_N1_', n2_array: 'sim/flightmodel/engine/ENGN_N2_',
-                 rpm_array: 'sim/cockpit2/engine/indicators/prop_speed_rpm', mp_array: 'sim/cockpit2/engine/indicators/MPR_in_hg' },
-    flaps:     { flap_handle: 'sim/cockpit2/controls/flap_handle_deploy_ratio', flap_actual: 'sim/flightmodel2/controls/flap1_deploy_ratio' },
-    gear:      { gear_handle: 'sim/cockpit/switches/gear_handle_status', gear_deploy: 'sim/flightmodel2/gear/deploy_ratio' },
-    egt:       { egt: 'sim/cockpit2/engine/indicators/EGT_deg_C', ff: 'sim/cockpit2/engine/indicators/fuel_flow_kg_sec' },
-    cht:       { cht: 'sim/cockpit2/engine/indicators/CHT_CYL_deg_C', cht_avg: 'sim/cockpit2/engine/indicators/CHT_deg_C', egt: 'sim/cockpit2/engine/indicators/EGT_deg_C' },
-    egtcyl:    { egt: 'sim/cockpit2/engine/indicators/EGT_CYL_deg_C', egt_avg: 'sim/cockpit2/engine/indicators/EGT_deg_C' },
-    obs: {
-      nav1_obs: 'sim/cockpit2/radios/actuators/nav1_obs_deg_mag_pilot', nav1_hdef: 'sim/cockpit/radios/nav1_hdef_dot',
-      nav1_fromto: 'sim/cockpit/radios/nav1_fromto', nav1_gs_flag: 'sim/cockpit/radios/nav1_flag_glideslope', nav1_vdef: 'sim/cockpit/radios/nav1_vdef_dot',
-      nav2_obs: 'sim/cockpit2/radios/actuators/nav2_obs_deg_mag_pilot', nav2_hdef: 'sim/cockpit/radios/nav2_hdef_dot',
-      nav2_fromto: 'sim/cockpit/radios/nav2_fromto', nav2_gs_flag: 'sim/cockpit/radios/nav2_flag_glideslope', nav2_vdef: 'sim/cockpit/radios/nav2_vdef_dot',
-    },
-    oil:         { oil_temp: 'sim/cockpit2/engine/indicators/oil_temperature_deg_C', oil_press: 'sim/cockpit2/engine/indicators/oil_pressure_psi' },
-    transponder: { code: 'sim/cockpit/radios/transponder_code', mode: 'sim/cockpit/radios/transponder_mode', ident: 'sim/cockpit/radios/transponder_id' },
-    lights: {
-      landing:   'sim/cockpit2/switches/landing_lights_on',
-      taxi:      'sim/cockpit2/switches/taxi_light_on',
-      nav:       'sim/cockpit2/switches/navigation_lights_on',
-      beacon:    'sim/cockpit2/switches/beacon_on',
-      strobe:    'sim/cockpit2/switches/strobe_lights_on',
-      logo:      'sim/cockpit2/switches/logo_lights_on',
-      wing:      'sim/cockpit2/switches/wing_lights_on',
-      formation: 'sim/cockpit2/switches/formation_lights_on',
-    },
-    autopilot: {
-      ap_on:          'sim/cockpit2/autopilot/autopilot_on',
-      fd_mode:        'sim/cockpit2/autopilot/flight_director_mode',
-      heading_dial:   'sim/cockpit2/autopilot/heading_dial_deg_mag_pilot',
-      altitude_dial:  'sim/cockpit2/autopilot/altitude_dial_ft',
-      vvi_dial:       'sim/cockpit2/autopilot/vvi_dial_fpm',
-      airspeed_dial:  'sim/cockpit2/autopilot/airspeed_dial_kts',
-      heading_mode:   'sim/cockpit2/autopilot/heading_mode',
-      altitude_mode:  'sim/cockpit2/autopilot/altitude_mode',
-      athr_on:        'sim/cockpit2/autopilot/autothrottle_on',
-      athr_arm:       'sim/cockpit2/autopilot/autothrottle_arm',
-      hnav_armed:     'sim/cockpit2/autopilot/hnav_armed',
-      glideslope_armed: 'sim/cockpit2/autopilot/glideslope_armed',
-      alt_hold_armed: 'sim/cockpit2/autopilot/altitude_hold_armed',
-      bkcrse_on:      'sim/cockpit2/autopilot/backcourse_on',
-      heading_status: 'sim/cockpit2/autopilot/heading_status',
-      nav_status:     'sim/cockpit2/autopilot/nav_status',
-      alt_hold_status:'sim/cockpit2/autopilot/altitude_hold_status',
-      vvi_status:     'sim/cockpit2/autopilot/vvi_status',
-      speed_status:   'sim/cockpit2/autopilot/speed_status',
-      gls_status:     'sim/cockpit2/autopilot/glideslope_status',
-      TOGA_status:    'sim/cockpit2/autopilot/TOGA_status',
-    },
-    radio: {
-      com1_mhz:     'sim/cockpit2/radios/actuators/com1_frequency_Mhz',
-      com1_khz:     'sim/cockpit2/radios/actuators/com1_frequency_khz',
-      com1_sby_mhz: 'sim/cockpit2/radios/actuators/com1_standby_frequency_Mhz',
-      com1_sby_khz: 'sim/cockpit2/radios/actuators/com1_standby_frequency_khz',
-      com1_rx:      'sim/cockpit2/radios/actuators/audio_selection_com1',
-      com2_mhz:     'sim/cockpit2/radios/actuators/com2_frequency_Mhz',
-      com2_khz:     'sim/cockpit2/radios/actuators/com2_frequency_khz',
-      com2_sby_mhz: 'sim/cockpit2/radios/actuators/com2_standby_frequency_Mhz',
-      com2_sby_khz: 'sim/cockpit2/radios/actuators/com2_standby_frequency_khz',
-      com2_rx:      'sim/cockpit2/radios/actuators/audio_selection_com2',
-      nav1_mhz:     'sim/cockpit2/radios/actuators/nav1_frequency_Mhz',
-      nav1_khz:     'sim/cockpit2/radios/actuators/nav1_frequency_khz',
-      nav1_sby_mhz: 'sim/cockpit2/radios/actuators/nav1_standby_frequency_Mhz',
-      nav1_sby_khz: 'sim/cockpit2/radios/actuators/nav1_standby_frequency_khz',
-      nav1_rx:      'sim/cockpit2/radios/actuators/audio_selection_nav1',
-      nav2_mhz:     'sim/cockpit2/radios/actuators/nav2_frequency_Mhz',
-      nav2_khz:     'sim/cockpit2/radios/actuators/nav2_frequency_khz',
-      nav2_sby_mhz: 'sim/cockpit2/radios/actuators/nav2_standby_frequency_Mhz',
-      nav2_sby_khz: 'sim/cockpit2/radios/actuators/nav2_standby_frequency_khz',
-      nav2_rx:      'sim/cockpit2/radios/actuators/audio_selection_nav2',
-      adf1_hz:      'sim/cockpit2/radios/actuators/adf1_frequency_hz',
-      adf1_sby_hz:  'sim/cockpit2/radios/actuators/adf1_standby_frequency_hz',
-      adf1_rx:      'sim/cockpit2/radios/actuators/audio_selection_adf1',
-      adf2_hz:      'sim/cockpit2/radios/actuators/adf2_frequency_hz',
-      adf2_sby_hz:  'sim/cockpit2/radios/actuators/adf2_standby_frequency_hz',
-      adf2_rx:      'sim/cockpit2/radios/actuators/audio_selection_adf2',
-    },
-    fuel: { fuel_qty: 'sim/cockpit2/fuel/fuel_quantity' },
-    g1000pfd: {
-      kias:         'sim/cockpit2/gauges/indicators/airspeed_kts_pilot',
-      kias_accel:   'sim/cockpit2/gauges/indicators/airspeed_acceleration_kts_sec_pilot',
-      tas:          'sim/cockpit2/gauges/indicators/true_airspeed_kts_pilot',
-      gs:           'sim/cockpit2/gauges/indicators/ground_speed_kt',
-      spd_bugs:     'sim/cockpit2/gauges/actuators/airspeed_bugs',
-      acf_vso:      'sim/aircraft/view/acf_Vso',
-      acf_vs:       'sim/aircraft/view/acf_Vs',
-      acf_vfe:      'sim/aircraft/view/acf_Vfe',
-      acf_vno:      'sim/aircraft/view/acf_Vno',
-      acf_vne:      'sim/aircraft/view/acf_Vne',
-      altitude:     'sim/cockpit2/gauges/indicators/altitude_ft_pilot',
-      baro_hg:      'sim/cockpit2/gauges/actuators/barometer_setting_in_hg_pilot',
-      alt_bug:      'sim/cockpit2/gauges/actuators/baro_altimeter_bug_ft_pilot',
-      alt_alert:    'sim/cockpit2/gauges/indicators/baro_altimeter_alert_lit_pilot',
-      ra_height:    'sim/cockpit2/gauges/indicators/radio_altimeter_height_ft_pilot',
-      ra_dh:        'sim/cockpit2/gauges/indicators/radio_altimeter_dh_lit_pilot',
-      vnav_alt:     'sim/cockpit2/autopilot/altitude_vnav_ft',
-      vnav_status:  'sim/cockpit2/autopilot/vnav_status',
-      pitch:        'sim/cockpit2/gauges/indicators/pitch_AHARS_deg_pilot',
-      roll:         'sim/cockpit2/gauges/indicators/roll_AHARS_deg_pilot',
-      slip:         'sim/cockpit2/gauges/indicators/slip_deg',
-      fd_on:        'sim/cockpit2/autopilot/flight_director_command_bars_pilot',
-      fd_pitch:     'sim/cockpit2/autopilot/flight_director_pitch_pilot',
-      fd_roll:      'sim/cockpit2/autopilot/flight_director_roll_pilot',
-      vvi:          'sim/cockpit2/gauges/indicators/vvi_fpm_pilot',
-      ap_on:        'sim/cockpit2/autopilot/autopilot_on',
-      fd_mode:      'sim/cockpit2/autopilot/flight_director_mode',
-      lat_mode:     'sim/cockpit2/autopilot/heading_mode',
-      vert_mode:    'sim/cockpit2/autopilot/altitude_mode',
-      hnav_armed:   'sim/cockpit2/autopilot/hnav_armed',
-      gs_armed:     'sim/cockpit2/autopilot/glideslope_armed',
-      vnav_armed:   'sim/cockpit2/autopilot/vnav_armed',
-      hdg_mag:      'sim/cockpit2/gauges/indicators/heading_AHARS_deg_mag_pilot',
-      hdg_bug:      'sim/cockpit2/autopilot/heading_dial_deg_mag_pilot',
-      hsi_src:      'sim/cockpit2/radios/actuators/HSI_source_select_pilot',
-      efis1_sel:    'sim/cockpit2/radios/actuators/EFIS_1_selection_pilot',
-      nav1_hdef:    'sim/cockpit2/radios/indicators/nav1_hdef_dots_pilot',
-      nav2_hdef:    'sim/cockpit2/radios/indicators/nav2_hdef_dots_pilot',
-      gps_hdef:     'sim/cockpit/radios/gps_hdef_dot',
-      nav1_fromto:  'sim/cockpit2/radios/indicators/nav1_flag_from_to_pilot',
-      nav1_gs_flag: 'sim/cockpit2/radios/indicators/nav1_flag_glideslope',
-      nav2_gs_flag: 'sim/cockpit2/radios/indicators/nav2_flag_glideslope',
-      nav1_bearing: 'sim/cockpit2/radios/indicators/nav1_bearing_deg_mag',
-      adf1_bearing: 'sim/cockpit2/radios/indicators/adf1_bearing_deg_mag',
-      gps_bearing:  'sim/cockpit/radios/gps_bearing_deg_mag',
-      gps_dme:      'sim/cockpit/radios/gps_dme_dist_m',
-      xpdr_code:    'sim/cockpit2/radios/actuators/transponder_code',
-      xpdr_mode:    'sim/cockpit2/radios/actuators/transponder_mode',
-      xpdr_id:      'sim/cockpit2/radios/indicators/transponder_id',
-      wind_hdg:     'sim/cockpit2/gauges/indicators/wind_heading_deg_mag',
-      wind_kts:     'sim/cockpit2/gauges/indicators/wind_speed_kts',
-      com1_act_mhz: 'sim/cockpit2/radios/actuators/com1_frequency_Mhz',
-      com1_act_khz: 'sim/cockpit2/radios/actuators/com1_frequency_khz',
-      com1_sby_mhz: 'sim/cockpit2/radios/actuators/com1_standby_frequency_Mhz',
-      com1_sby_khz: 'sim/cockpit2/radios/actuators/com1_standby_frequency_khz',
-      com2_act_mhz: 'sim/cockpit2/radios/actuators/com2_frequency_Mhz',
-      com2_act_khz: 'sim/cockpit2/radios/actuators/com2_frequency_khz',
-      com2_sby_mhz: 'sim/cockpit2/radios/actuators/com2_standby_frequency_Mhz',
-      com2_sby_khz: 'sim/cockpit2/radios/actuators/com2_standby_frequency_khz',
-      nav1_act_mhz: 'sim/cockpit2/radios/actuators/nav1_frequency_Mhz',
-      nav1_act_khz: 'sim/cockpit2/radios/actuators/nav1_frequency_khz',
-      nav1_sby_mhz: 'sim/cockpit2/radios/actuators/nav1_standby_frequency_Mhz',
-      nav1_sby_khz: 'sim/cockpit2/radios/actuators/nav1_standby_frequency_khz',
-      nav2_act_mhz: 'sim/cockpit2/radios/actuators/nav2_frequency_Mhz',
-      nav2_act_khz: 'sim/cockpit2/radios/actuators/nav2_frequency_khz',
-      nav2_sby_mhz: 'sim/cockpit2/radios/actuators/nav2_standby_frequency_Mhz',
-      nav2_sby_khz: 'sim/cockpit2/radios/actuators/nav2_standby_frequency_khz',
-    },
-  }
-  return map[type] || {}
+  return _registry?.byType.get(type)?.meta.datarefs || {}
 }
 
 function showOverlay(msg) {

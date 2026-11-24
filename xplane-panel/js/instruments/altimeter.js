@@ -260,3 +260,12 @@ export class Altimeter extends BaseInstrument {
     ctx.restore()
   }
 }
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'altimeter',
+  label:    'Altimeter',
+  icon:     '↕',
+  order:    20,
+  datarefs: DEFAULTS,
+}

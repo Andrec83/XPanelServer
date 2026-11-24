@@ -6,14 +6,14 @@ const NAV_DREFS = [
     obs:     'sim/cockpit2/radios/actuators/nav1_obs_deg_mag_pilot',
     hdef:    'sim/cockpit/radios/nav1_hdef_dot',
     fromto:  'sim/cockpit/radios/nav1_fromto',
-    gs_flag: 'sim/cockpit/radios/nav1_flag_glideslope',
+    gs_flag: 'sim/cockpit2/radios/indicators/nav1_flag_glideslope',
     vdef:    'sim/cockpit/radios/nav1_vdef_dot',
   },
   {
     obs:     'sim/cockpit2/radios/actuators/nav2_obs_deg_mag_pilot',
     hdef:    'sim/cockpit/radios/nav2_hdef_dot',
     fromto:  'sim/cockpit/radios/nav2_fromto',
-    gs_flag: 'sim/cockpit/radios/nav2_flag_glideslope',
+    gs_flag: 'sim/cockpit2/radios/indicators/nav2_flag_glideslope',
     vdef:    'sim/cockpit/radios/nav2_vdef_dot',
   },
 ]
@@ -415,4 +415,14 @@ export class OBSGauge extends BaseInstrument {
     while (diff < -180) diff += 360
     return current + diff * factor
   }
+}
+
+// ── Panel Manager registration (see ARCHITECTURE.md → Adding a new instrument) ──
+export const META = {
+  type:     'obs',
+  label:    'OBS / CDI',
+  icon:     '🧭',
+  order:    120,
+  datarefs: DEFAULTS,
+  select:   'nav',
 }
