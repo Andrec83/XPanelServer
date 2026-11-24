@@ -61,7 +61,8 @@ This **avoids CORS issues** that would occur if the browser tried to talk direct
 | `xplane-panel/js/panel.js`                | `panel.html`'s entry point — instantiates instruments, manages WS subscription lifecycle            |
 | `xplane-panel/js/instrument-registry.js`  | Fetches `/instruments`, imports every listed module, builds the type → class/META map and palette sections used by both pages |
 | `xplane-panel/js/instruments/<Section>/`  | Aircraft-specific instrument packs; each sub-folder becomes a collapsible palette section (`King Air 350/`, `Pilatus PC-6/`, `Boeing 737/`, `Airbus A330/`) |
-| `xplane-panel/js/instruments/_glass.js`   | Shared helpers for the airliner glass displays: standard flight/engine/fuel dataref sets, attitude ball, speed/altitude tapes, dials, readouts, vertical scales, position-based fuel-tank identification (`fuelTanks()`), weight units. Not listed as an instrument (leading `_`) |
+| `xplane-panel/js/instruments/_glass.js`   | Shared helpers for the airliner glass displays: standard flight/engine/fuel dataref sets, attitude ball, speed/altitude tapes, dials, readouts, vertical scales, position-based fuel-tank identification (`fuelTanks()`), weight units, `dataText()` (decodes base64 / byte-array "data" datarefs such as the Laminar ECAM text lines). Not listed as an instrument (leading `_`) |
+| `xplane-panel/js/instruments/<Section>/_*.js` | Pack-private helpers, e.g. `Airbus A330/_sd.js` (SD page colours, title, TAT/SAT/UTC/GW footer, valves, buses). Skipped by discovery like any `_` file |
 | `xplane-panel/js/instruments/base.js`     | `BaseInstrument` class: canvas resize handling, render loop, shared drawing utilities, theme system, ambient overlay effects |
 | `xplane-panel/js/instruments/airspeed.js` | Airspeed indicator with colour-coded speed limits (`V<sub>S0</sub>`, `V<sub>FE</sub>`, `V<sub>NE</sub>`…)         |
 | `xplane-panel/js/instruments/altimeter.js`| Three-pointer altimeter with barometric pressure knob and Kollsman window                           |
@@ -171,6 +172,7 @@ All instruments extend `BaseInstrument`:
 | `_renderEmissive()`       | Optional; drawn **after** the darkness overlay — for self-lit LED/LCD digits, annunciators, EFIS symbology that must stay readable at night |
 | `_drawHypoxiaOverlay()`   | Called last; hypoxia blackout covers everything, including emissive layers and buttons |
 | `setTouchButtons(buttons, opts)` | Declare on-screen buttons; the base class draws them, hit-tests taps, does hold-to-repeat, and hides/disables them when touch controls are off |
+| `_touchLayout()`          | Returns the button rectangles (`{btn, x, y, w, h}`) used for both drawing and hit-testing; default is a strip along the top/bottom edge. Override it to place buttons anywhere (e.g. the A330 ECAM control panel lays them out like the real panel) |
 | `controlsVisible` / `touchStripHeight` | Whether touch controls are on for this widget / pixel height of the button strip (0 when hidden) — for instruments that prefer to shrink rather than be overlaid |
 | `onPointerDown/Move/Up()` | For interactive instruments (heading bug, flaps, gear, transponder, altimeter baro)       |
 | `requiredDatarefs()`      | Returns the list of dataref names this instrument needs                                   |
@@ -421,7 +423,14 @@ Engine count is auto-detected from `profile.numEngines`. The layout uses strictl
 
 ### Command Execution
 
-Interactive instruments (flaps, gear, transponder) use X-Plane **commands** rather than direct dataref writes where appropriate, because many sim controls require momentary activation. Commands are sent via WebSocket `command_set_is_active` with `duration:0`.
+Interactive instruments (flaps, gear, transponder) use X-Plane **commands** rather than direct dataref writes where appropriate, because many sim controls require momentary activation. Commands are sent via WebSocket `command_set_is_active`. `xplane-api.js` offers two forms:
+
+| Function | Sends | Use for |
+|---|---|---|
+| `triggerCommand(name)` | `is_active: true, duration: 0` (momentary) | X-Plane default commands and most add-ons |
+| `pressCommand(name, holdMs = 120)` | `is_active: true`, then `is_active: false` after `holdMs` | Add-ons that act on a real begin/end press and ignore the momentary form — e.g. the Laminar A330 pushbuttons (ECAM control panel, ISFD) |
+
+If a button does nothing although the command name is correct, try `pressCommand`.
 
 ---
 
@@ -494,6 +503,19 @@ Instruments are **self-describing and auto-discovered** — there is nothing to 
 6. If it needs aircraft-specific configuration, override `setAircraftProfile(profile)`.
 7. Reload the Panel Manager — the instrument appears in its section. If a file fails to import, the palette lists it together with the error.
 8. With X-Plane running, the Panel Manager checks every instrument's datarefs (defaults + the widget's overrides) against the list X-Plane publishes. An instrument whose required datarefs are missing is shown **red** in the palette and the grid, hovering it explains what is missing (plus `requires`), and the sidebar outlines the missing dataref fields in red (optional ones in amber). The check re-runs when the page regains focus, on **Recheck**, and when an override is edited — so a wrong or renamed dataref name shows up immediately, with no per-instrument code.
+
+### Sharing a single instrument
+
+Because nothing is registered by hand, an instrument is deployed by copying its file (plus any `_` helpers it imports) into `<X-Plane>/Resources/plugins/XPanelServer/Resources/web/js/instruments/` or a sub-folder there, then reloading the Panel Manager — no plugin rebuild. Keep custom instruments in their **own** sub-folder: plugin updates replace the shipped folders, and a file with the same name as a shipped one is overwritten.
+
+### Composite instruments (one widget, several pages)
+
+An instrument can host other instruments on its own canvas — `Airbus A330/A333_sd.js` shows whichever SD page is selected. The pattern:
+
+- **Datarefs:** `panel.js` subscribes only to `META.datarefs`, so the host merges every child's `DEFAULTS` into its own, with prefixed keys (`eng.n1`, `fuel.pump_l1`, …). It passes the full state to the active child, which picks its own names.
+- **Rendering:** the host overrides `_startLoop()` and `_setupResizeObserver()` with no-ops and creates the child on the same canvas when the page changes (destroying the previous one), so only the child draws.
+- **Forwarding:** `setAmbient`, `setTheme`, `setAircraftProfile` and `destroy` are forwarded to the child (pointer events are not; add them if a hosted page gets touch controls).
+- **Standalone pages:** each page keeps its own `META`, so it can also be placed as a separate widget.
 
 ### Instrument discovery
 
