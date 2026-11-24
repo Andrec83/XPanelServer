@@ -110,7 +110,7 @@ All panels automatically respond to sim conditions in real time:
 
 ### King Air 350 pack
 
-Aircraft-specific replicas for the King Air 350 (contributed). Most read the add-on's own `KA350/...` datarefs, so they only work with that aircraft loaded — with any other aircraft they show no data and appear **red** in the Panel Manager. The engine gauges and the annunciator panel use only `KA350/...` datarefs; the EADI, EHSI and steam gauges partly use standard datarefs, so they move with other aircraft but are incomplete.
+Aircraft-specific replicas for the King Air 350, contributed by [Pascalander](https://forums.x-plane.org/profile/665121-pascalander/). Most read the add-on's own `KA350/...` datarefs, so they only work with that aircraft loaded — with any other aircraft they show no data and appear **red** in the Panel Manager. The engine gauges and the annunciator panel use only `KA350/...` datarefs; the EADI, EHSI and steam gauges partly use standard datarefs, so they move with other aircraft but are incomplete.
 
 | Instrument | Description |
 |---|---|
@@ -123,7 +123,7 @@ Aircraft-specific replicas for the King Air 350 (contributed). Most read the add
 
 ### Pilatus PC-6 pack
 
-Steam gauges styled and calibrated for the PC-6 Porter (contributed). They use standard X-Plane datarefs, so they also work on other light aircraft, but the airspeed and VSI markings are PC-6 specific.
+Steam gauges styled and calibrated for the PC-6 Porter, contributed by [Pascalander](https://forums.x-plane.org/profile/665121-pascalander/). They use standard X-Plane datarefs, so they also work on other light aircraft, but the airspeed and VSI markings are PC-6 specific.
 
 | Instrument | Description |
 |---|---|
@@ -178,6 +178,14 @@ ECAM-style displays (green values, cyan units). Also based on standard datarefs,
 ### Per-engine instruments (EGT, CHT, Oil, EGT / Cylinders)
 
 When you **drag one of these onto the grid**, a popup immediately asks which engine to associate it with (ENG 1–4). For a twin-engine aircraft, add two EGT widgets side by side - one for each engine. You can change the engine assignment later by clicking the widget in the editor and adjusting the "Engine" dropdown in the config sidebar.
+
+---
+
+## Credits
+
+- **King Air 350** and **Pilatus PC-6** instrument packs: [Pascalander](https://forums.x-plane.org/profile/665121-pascalander/) — the first aircraft packs contributed to the project. Thank you!
+
+Want to add your own instruments or an aircraft pack? See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 

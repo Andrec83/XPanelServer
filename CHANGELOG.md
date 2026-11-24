@@ -2,7 +2,7 @@
 
 ## v2.0.0
 
-A major release that makes the panel **open to third-party instruments**: an instrument is now one self-contained file that you drop into a folder. No more editing `index.html` or `panel.js`. It also adds the first two contributed aircraft packs, on-screen touch buttons, and a Panel Manager that tells you when an instrument can't work with the loaded aircraft.
+A major release that makes the panel **open to third-party instruments**: an instrument is now one self-contained file that you drop into a folder. No more editing `index.html` or `panel.js`. It also adds the first two contributed aircraft packs (King Air 350 and Pilatus PC-6, by [Pascalander](https://forums.x-plane.org/profile/665121-pascalander/)), on-screen touch buttons, and a Panel Manager that tells you when an instrument can't work with the loaded aircraft.
 
 > **Upgrade note:** install the plugin and the web files **together** (the release zip contains both). The new Panel Manager needs the plugin's new `/instruments` endpoint, so with an older plugin the palette stays empty. Your saved panels (`panels.json`) keep working as they are.
 
@@ -26,7 +26,7 @@ A major release that makes the panel **open to third-party instruments**: an ins
 - Instruments can declare on-screen buttons. The base class draws them, handles taps and hold-to-repeat, and keeps them readable at night.
 - A **Touch controls** switch in the editor's top bar shows or hides the buttons for the whole panel. Each widget can override it (Panel default / Show / Hide), which is handy for display-only screens.
 
-**King Air 350 pack** (contributed, 13 instruments)
+**King Air 350 pack** (contributed by [Pascalander](https://forums.x-plane.org/profile/665121-pascalander/), 13 instruments)
 - EADI, EHSI, altimeter, airspeed, VSI, standby attitude, torque, ITT, turbine RPM (N1), prop RPM, fuel flow, oil temp/pressure, and the annunciator panel.
 - Touch buttons:
   - EHSI: HDG −/+, SYNC, CRS −/+
@@ -34,7 +34,7 @@ A major release that makes the panel **open to third-party instruments**: an ins
   - EADI: DH −/+
 - Most read the King Air 350 add-on's own `KA350/…` datarefs, so they need that aircraft loaded. With other aircraft they are shown red.
 
-**Pilatus PC-6 pack** (contributed, 7 instruments)
+**Pilatus PC-6 pack** (contributed by [Pascalander](https://forums.x-plane.org/profile/665121-pascalander/), 7 instruments)
 - Airspeed, VSI, attitude (vacuum), altimeter, heading, OBS/CDI, and ITT + fuel flow.
 - Touch buttons:
   - Altimeter: BARO −/+, 29.92
@@ -105,4 +105,4 @@ Both packs use X-Plane's standard engine and fuel datarefs, so they also work on
   - `setTouchButtons()`, `controlsVisible`, `touchStripHeight`
   - `_renderEmissive()`, for self-lit content drawn above the night overlay
 - `writeDataref(id, value, index)` can now write a single element of an array dataref.
-- Panels made with the contributor's modified copy of the stock instruments need their widget types renamed to the new pack types (`b350_*`, `pc6_*`).
+- Panels made with Pascalander's modified copy of the stock instruments need their widget types renamed to the new pack types (`b350_*`, `pc6_*`).
